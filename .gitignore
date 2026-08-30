@@ -1,0 +1,40 @@
+# Local architecture notes and implementation plans are intentionally not published.
+docs/
+frontend/DESIGN.md
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+.coverage
+htmlcov/
+*.db
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+build/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# Tooling and local artifacts
+.DS_Store
+.design/
+.vercel/
+.codex/
+.agents/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*

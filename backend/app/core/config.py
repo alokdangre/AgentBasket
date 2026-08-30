@@ -1,0 +1,37 @@
+from functools import lru_cache
+
+from pydantic import Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    app_name: str = "AgentBasket Commerce Core"
+    app_env: str = "development"
+    database_url: str = "postgresql+psycopg://agentbasket:agentbasket@localhost:5432/agentbasket"
+    sql_echo: bool = False
+    checkout_ttl_minutes: int = Field(default=10, ge=1, le=60)
+    auth_session_ttl_days: int = Field(default=30, ge=1, le=90)
+    merchant_admin_email: str | None = None
+    merchant_admin_password: str | None = Field(default=None, min_length=12)
+    merchant_admin_name: str = "Merchant Owner"
+    razorpay_key_id: str | None = None
+    razorpay_key_secret: str | None = None
+    razorpay_webhook_secret: str | None = None
+    razorpay_api_url: str = "https://api.razorpay.com/v1"
+    razorpay_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
+    google_api_key: SecretStr | None = None
+    agent_model: str = "gemini-flash-latest"
+    agent_timeout_seconds: float = Field(default=30.0, ge=5.0, le=60.0)
+    agent_max_history_messages: int = Field(default=20, ge=4, le=40)
+    agent_max_output_characters: int = Field(default=6000, ge=1000, le=12000)
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

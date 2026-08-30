@@ -1,0 +1,1 @@
+"""Protocol-neutral domain model."""
