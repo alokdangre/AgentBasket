@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     agent_timeout_seconds: float = Field(default=30.0, ge=5.0, le=60.0)
     agent_max_history_messages: int = Field(default=20, ge=4, le=40)
     agent_max_output_characters: int = Field(default=6000, ge=1000, le=12000)
+    ap2_audience: str = "agentbasket-commerce"
+    ap2_challenge_ttl_seconds: int = Field(default=300, ge=60, le=900)
+    ap2_merchant_issuer: str = "urn:agentbasket:merchant:ember-and-leaf"
+    ap2_merchant_key_id: str = "ember-merchant-test-1"
+    ap2_merchant_private_key_pem: SecretStr | None = None
+    ap2_trusted_surface_issuer: str = "urn:agentbasket:trusted-surface:test"
+    ap2_trusted_surface_key_id: str = "agentbasket-surface-test-1"
+    ap2_trusted_surface_private_key_pem: SecretStr | None = None
+    ap2_payment_processor_issuer: str = "urn:agentbasket:payment-processor:razorpay-test"
+    ap2_payment_processor_key_id: str = "agentbasket-processor-test-1"
+    ap2_payment_processor_private_key_pem: SecretStr | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -894,6 +894,122 @@
   font-size: 0.7rem;
 }
 
+.agentCheckoutArtifact > button,
+.agentAp2Approval button {
+  width: 100%;
+  min-height: 2.5rem;
+  border: 1px solid var(--persimmon);
+  background: var(--persimmon);
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.agentCheckoutArtifact button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.agentCheckoutLines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-top: 0.5rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--rule);
+}
+
+.agentCheckoutLines span {
+  color: var(--espresso);
+  font-size: 0.68rem;
+}
+
+.agentAp2Approval {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--rule);
+}
+
+.agentAp2Approval > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.agentAp2Approval span {
+  color: var(--muted);
+  font-size: 0.6rem;
+}
+
+.agentAp2Approval strong {
+  overflow: hidden;
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentAp2Approval code {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  padding: 0.35rem;
+  background: var(--paper);
+  color: var(--muted);
+  font-size: 0.58rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentAp2Approval button {
+  grid-column: 1 / -1;
+}
+
+.agentPaymentStatus {
+  margin: 0.5rem 0 0 !important;
+  color: var(--espresso) !important;
+}
+
+.agentPaymentReceipt {
+  margin-top: 0.75rem;
+  padding: 0.8rem;
+  border: 1px solid var(--leaf);
+  background: rgba(31, 86, 61, 0.08);
+}
+
+.agentPaymentReceipt > span,
+.agentPaymentReceipt > strong {
+  display: block;
+}
+
+.agentPaymentReceipt > span {
+  color: var(--leaf);
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.agentPaymentReceipt > strong {
+  margin-top: 0.1rem;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+}
+
+.agentPaymentReceipt p {
+  margin: 0.3rem 0 0.55rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.agentPaymentReceipt a {
+  padding-bottom: 0.1rem;
+  border-bottom: 1px solid currentColor;
+  color: var(--persimmon);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
 .agentSuggestions {
   display: flex;
   flex-direction: column;

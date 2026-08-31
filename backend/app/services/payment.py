@@ -42,6 +42,7 @@ from app.schemas.payment import (
     RazorpayVerifyRequest,
     WebhookResultOut,
 )
+from app.services.ap2 import AP2Service
 
 
 def utc_now() -> datetime:
@@ -85,6 +86,7 @@ class PaymentService:
                     raise ConflictError(
                         "approval_required", "Approve the exact checkout before payment."
                     )
+                AP2Service(self.db).require_verified_mandates(checkout, approval)
                 order = self.db.scalar(
                     select(Order).where(Order.checkout_id == checkout.id).with_for_update()
                 )
@@ -401,6 +403,12 @@ class PaymentService:
         checkout.status = CheckoutStatus.COMPLETED
         self._consume_reservations(checkout)
         self._subtract_checkout_from_cart(checkout)
+        AP2Service(self.db).record_success_receipts(
+            checkout,
+            order,
+            payment,
+            provider_payment.network_confirmation_id,
+        )
         self.db.add_all(
             [
                 AuditEvent(
@@ -651,6 +659,14 @@ class PaymentService:
                 currency=str(entity["currency"]).upper(),
                 status=str(entity["status"]),
                 captured=bool(entity["captured"]),
+                network_confirmation_id=next(
+                    (
+                        str((entity.get("acquirer_data") or {})[key])
+                        for key in ("rrn", "upi_transaction_id", "auth_code")
+                        if (entity.get("acquirer_data") or {}).get(key)
+                    ),
+                    None,
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise DomainError(

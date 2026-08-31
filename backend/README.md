@@ -12,9 +12,13 @@ Step 4 adds authenticated cart-to-checkout conversion, persisted human approval 
 Razorpay test-mode Orders, server-side checkout-signature verification, captured payment/order
 reconciliation, idempotent raw-body webhooks, inventory consumption and customer receipts.
 
-Step 5 adds the Google ADK-powered Ask Ember agent with persistent conversations, deterministic
+Step 5 adds the LangGraph-powered Ask Ember agent with persistent conversations, deterministic
 catalog recommendations, identity-bound cart tools, exact checkout preparation, idempotent runs
 and tool-level audit records. The agent has no approval or payment tool.
+
+Step 6 adds a human-present AP2 v0.2 gate to agent-prepared checkouts. It persists one-time consent
+challenges, ES256 Checkout and Payment Mandates, trusted issuers and signed success receipts, then
+opens Razorpay Standard Checkout inside the conversation only after both mandates verify.
 
 ## Local setup
 
@@ -39,7 +43,8 @@ The versioned API includes:
 - checkout approval and payment sessions under `/api/v1/checkouts`;
 - `POST /api/v1/payments/razorpay/verify` and `POST /api/v1/webhooks/razorpay`;
 - customer receipts under `/api/v1/orders`; and
-- authenticated Ask Ember conversations and messages under `/api/v1/agent/conversations`.
+- authenticated Ask Ember conversations and messages under `/api/v1/agent/conversations`; and
+- AP2 challenge, approval and evidence under `/api/v1/checkouts/{checkout_id}/ap2`.
 
 Set the development-only `MERCHANT_ADMIN_*` values before running the seed command to create
 the first merchant administrator. Do not reuse those example credentials outside local setup.
@@ -51,9 +56,14 @@ server-only; Standard Checkout receives only the public key ID and the exact pro
 created by the backend.
 
 For Ask Ember, set the backend-only `GOOGLE_API_KEY`. `AGENT_MODEL` defaults to
-`gemini-flash-latest`. Google ADK is pinned to 2.8.0 because its 2.x agent, event and session APIs
-are not compatible with older releases. Live Gemini calls require your key; the automated suite
-uses a deterministic fake runtime while exercising the real commerce tools and persistence.
+`gemini-flash-latest`. LangGraph 1.2.11 owns only the bounded model/tool loop; the existing database
+owns conversations, idempotency and every commerce state. Live Gemini calls require your key; the
+automated suite uses a deterministic fake runtime while exercising the real tools and persistence.
+
+For AP2, configure separate ES256 P-256 private keys for the merchant, trusted surface and
+test-mode payment processor using the `AP2_*` settings in `.env.example`. The public keys are
+registered on first use. Agent-prepared checkouts fail closed when issuers are absent or do not
+match the trust registry. These test issuers are not a production passkey substitute.
 
 ## Tests
 

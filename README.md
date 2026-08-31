@@ -9,7 +9,7 @@ The merchant app now contains:
 - a responsive Next.js storefront, customer account, cart and merchant console under
   [`frontend`](frontend/);
 - Razorpay test-mode checkout with server-side signature and capture verification; and
-- Ask Ember, a Google ADK shopping agent for recommendations, cart changes and exact checkout
-  preparation.
+- Ask Ember, a LangGraph shopping agent for recommendations, cart changes, exact checkout
+  preparation and AP2-gated in-chat Razorpay payment.
 
 Run the storefront with `cd frontend && npm install && npm run dev` after starting the FastAPI core.

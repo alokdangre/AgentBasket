@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 
+import { AgentCheckoutPayment } from "@/components/agent-checkout-payment";
 import type { AgentMessage } from "@/lib/account-types";
 import { formatMoney, productImages } from "@/lib/storefront-data";
 import styles from "@/styles/storefront.module.css";
@@ -9,12 +10,14 @@ type AgentMessageViewProps = {
   message: AgentMessage;
   disabled: boolean;
   onSuggestion: (suggestion: string) => void;
+  onPaid: () => void;
 };
 
 export function AgentMessageView({
   message,
   disabled,
   onSuggestion,
+  onPaid,
 }: AgentMessageViewProps) {
   const structured = message.structured_content;
   const products = structured.products ?? [];
@@ -78,21 +81,11 @@ export function AgentMessageView({
       ) : null}
 
       {structured.checkout ? (
-        <div className={styles.agentCheckoutArtifact}>
-          <span>Exact checkout prepared</span>
-          <strong>
-            {formatMoney(structured.checkout.total_minor, structured.checkout.currency)}
-          </strong>
-          <p>
-            Approval and Razorpay payment remain separate. Reserved until{" "}
-            {new Date(structured.checkout.expires_at).toLocaleTimeString("en-IN", {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-            .
-          </p>
-          <Link href={structured.checkout.review_url}>Review exact checkout</Link>
-        </div>
+        <AgentCheckoutPayment
+          checkout={structured.checkout}
+          disabled={disabled}
+          onPaid={onPaid}
+        />
       ) : null}
 
       {structured.suggestions?.length ? (

@@ -103,6 +103,7 @@ export type Checkout = {
   total_minor: number;
   quote_version: number;
   expires_at: string;
+  source: "storefront" | "agent";
 };
 
 export type CheckoutApproval = {
@@ -280,6 +281,64 @@ export type AgentTurn = {
   conversation_id: string;
   run_id: string;
   message: AgentMessage;
+};
+
+export type AP2Challenge = {
+  id: string;
+  checkout_id: string;
+  nonce: string;
+  checkout_hash: string;
+  display_sha256: string;
+  expires_at: string;
+  display: {
+    total_minor: number;
+    currency: string;
+    quote_version: number;
+    fulfillment: {
+      title: string;
+      postal_code: string | null;
+      eta_min_minutes: number | null;
+      eta_max_minutes: number | null;
+    };
+  };
+  checkout_mandate: { vct: "mandate.checkout.1" };
+  payment_mandate: { vct: "mandate.payment.1" };
+};
+
+export type AP2MandateEvidence = {
+  id: string;
+  mandate_type: "checkout" | "payment";
+  vct: string;
+  issuer: string;
+  key_id: string;
+  checkout_hash: string;
+  verification_status: "verified";
+  signed_jwt: string;
+};
+
+export type AP2Approval = {
+  challenge_id: string;
+  checkout_hash: string;
+  approval: CheckoutApproval;
+  mandates: AP2MandateEvidence[];
+};
+
+export type AP2Evidence = {
+  checkout_id: string;
+  challenge_id: string;
+  checkout_hash: string;
+  status: "accepted";
+  mandates: AP2MandateEvidence[];
+  receipts: Array<{
+    id: string;
+    receipt_type: "checkout" | "payment";
+    status: "Success";
+    issuer: string;
+    key_id: string;
+    reference: string;
+    signed_jwt: string;
+    created_at: string;
+  }>;
 };
 
 export function apiErrorMessage(payload: ApiError, fallback: string): string {

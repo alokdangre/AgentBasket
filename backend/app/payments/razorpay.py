@@ -27,6 +27,7 @@ class RazorpayPayment:
     currency: str
     status: str
     captured: bool
+    network_confirmation_id: str | None = None
 
 
 class RazorpayGateway(Protocol):
@@ -94,6 +95,7 @@ class RazorpayHttpGateway:
     def fetch_payment(self, payment_id: str) -> RazorpayPayment:
         payload = self._request("GET", f"/payments/{payment_id}")
         try:
+            acquirer_data = payload.get("acquirer_data") or {}
             return RazorpayPayment(
                 id=str(payload["id"]),
                 order_id=str(payload["order_id"]),
@@ -101,6 +103,14 @@ class RazorpayHttpGateway:
                 currency=str(payload["currency"]).upper(),
                 status=str(payload["status"]),
                 captured=bool(payload["captured"]),
+                network_confirmation_id=next(
+                    (
+                        str(acquirer_data[key])
+                        for key in ("rrn", "upi_transaction_id", "auth_code")
+                        if acquirer_data.get(key)
+                    ),
+                    None,
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise DomainError(

@@ -32,6 +32,24 @@ function isAllowed(method: string, path: string[]): boolean {
   ) {
     return true;
   }
+  if (
+    path.length === 4 &&
+    path[0] === "checkouts" &&
+    path[2] === "ap2" &&
+    ["challenge", "approve"].includes(path[3]) &&
+    method === "POST"
+  ) {
+    return true;
+  }
+  if (
+    path.length === 4 &&
+    path[0] === "checkouts" &&
+    path[2] === "ap2" &&
+    path[3] === "evidence" &&
+    method === "GET"
+  ) {
+    return true;
+  }
   if (path.length === 3 && path[0] === "cart" && path[1] === "items") {
     return ["PATCH", "DELETE"].includes(method);
   }

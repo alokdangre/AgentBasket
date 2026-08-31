@@ -432,6 +432,13 @@ class Checkout(TimestampMixin, Base):
     total_minor: Mapped[int] = mapped_column(Integer, default=0)
     quote_version: Mapped[int] = mapped_column(Integer, default=1)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    source: Mapped[str] = mapped_column(String(24), default="storefront", index=True)
+    agent_conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="SET NULL"), index=True
+    )
+    agent_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL"), index=True
+    )
 
     lines: Mapped[list[CheckoutLineItem]] = relationship(
         back_populates="checkout",
@@ -550,6 +557,106 @@ class CheckoutApproval(Base):
     currency: Mapped[str] = mapped_column(String(3))
     evidence_sha256: Mapped[str] = mapped_column(String(64), unique=True)
     approved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, index=True
+    )
+
+
+class Ap2TrustedIssuer(TimestampMixin, Base):
+    __tablename__ = "ap2_trusted_issuers"
+    __table_args__ = (UniqueConstraint("issuer", "key_id", name="uq_ap2_trusted_issuer_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    issuer: Mapped[str] = mapped_column(String(240), index=True)
+    key_id: Mapped[str] = mapped_column(String(120))
+    role: Mapped[str] = mapped_column(String(40))
+    algorithm: Mapped[str] = mapped_column(String(16), default="ES256")
+    public_key_pem: Mapped[str] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+
+class Ap2ConsentChallenge(TimestampMixin, Base):
+    __tablename__ = "ap2_consent_challenges"
+    __table_args__ = (
+        UniqueConstraint("customer_id", "idempotency_key", name="uq_ap2_challenge_idempotency"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    checkout_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("checkouts.id", ondelete="RESTRICT"), index=True
+    )
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="RESTRICT"), index=True
+    )
+    approval_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("checkout_approvals.id", ondelete="SET NULL"), unique=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    nonce: Mapped[str] = mapped_column(String(128), unique=True)
+    checkout_jwt: Mapped[str] = mapped_column(Text)
+    checkout_hash: Mapped[str] = mapped_column(String(64), index=True)
+    display_sha256: Mapped[str] = mapped_column(String(64))
+    display_payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approval_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    approval_request_sha256: Mapped[str | None] = mapped_column(String(64))
+
+
+class Ap2Mandate(Base):
+    __tablename__ = "ap2_mandates"
+    __table_args__ = (UniqueConstraint("challenge_id", "mandate_type", name="uq_ap2_mandate_type"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    challenge_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("ap2_consent_challenges.id", ondelete="CASCADE"), index=True
+    )
+    checkout_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("checkouts.id", ondelete="RESTRICT"), index=True
+    )
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="RESTRICT"), index=True
+    )
+    mandate_type: Mapped[str] = mapped_column(String(24), index=True)
+    vct: Mapped[str] = mapped_column(String(64))
+    issuer: Mapped[str] = mapped_column(String(240))
+    key_id: Mapped[str] = mapped_column(String(120))
+    signed_jwt: Mapped[str] = mapped_column(Text)
+    payload_sha256: Mapped[str] = mapped_column(String(64), unique=True)
+    checkout_hash: Mapped[str] = mapped_column(String(64), index=True)
+    verification_status: Mapped[str] = mapped_column(String(24), index=True)
+    rejection_code: Mapped[str | None] = mapped_column(String(120))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, index=True
+    )
+
+
+class Ap2Receipt(Base):
+    __tablename__ = "ap2_receipts"
+    __table_args__ = (
+        UniqueConstraint("checkout_id", "receipt_type", name="uq_ap2_checkout_receipt_type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    checkout_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("checkouts.id", ondelete="RESTRICT"), index=True
+    )
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("orders.id", ondelete="RESTRICT"), index=True
+    )
+    payment_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("payments.id", ondelete="RESTRICT"), index=True
+    )
+    receipt_type: Mapped[str] = mapped_column(String(24), index=True)
+    status: Mapped[str] = mapped_column(String(24))
+    issuer: Mapped[str] = mapped_column(String(240))
+    key_id: Mapped[str] = mapped_column(String(120))
+    reference: Mapped[str] = mapped_column(String(64), index=True)
+    signed_jwt: Mapped[str] = mapped_column(Text)
+    payload_sha256: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, index=True
     )
 

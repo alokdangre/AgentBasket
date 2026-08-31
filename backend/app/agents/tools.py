@@ -57,7 +57,7 @@ class AgentToolbox:
         self.run_id = run_id
         self.outcomes: list[dict[str, Any]] = []
 
-    def adk_tools(self) -> list[Callable[..., dict[str, Any]]]:
+    def commerce_tools(self) -> list[Callable[..., dict[str, Any]]]:
         def search_catalog(
             query: str = "", postal_code: str = "", max_price_minor: int = 0
         ) -> dict[str, Any]:
@@ -371,7 +371,12 @@ class AgentToolbox:
             location_id=uuid.UUID(location_id) if location_id else None,
         )
         checkout = CheckoutService(self.db).create_from_cart(
-            payload, f"agent-{self.run_id}", self.customer
+            payload,
+            f"agent-{self.run_id}",
+            self.customer,
+            source="agent",
+            agent_conversation_id=self.conversation_id,
+            agent_run_id=self.run_id,
         )
         checkout_payload = checkout.model_dump(mode="json")
         checkout_payload.update(

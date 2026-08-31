@@ -62,6 +62,10 @@ class CheckoutService:
         payload: CheckoutFromCartCreate,
         idempotency_key: str,
         customer: UserAccount,
+        *,
+        source: str = "storefront",
+        agent_conversation_id: uuid.UUID | None = None,
+        agent_run_id: uuid.UUID | None = None,
     ) -> CheckoutOut:
         with self.db.begin():
             merchant = self.locations.merchant_by_slug(payload.merchant_slug)
@@ -101,10 +105,24 @@ class CheckoutService:
                     for item in cart.items
                 ],
             )
-            return self._create(checkout_payload, idempotency_key, customer)
+            return self._create(
+                checkout_payload,
+                idempotency_key,
+                customer,
+                source=source,
+                agent_conversation_id=agent_conversation_id,
+                agent_run_id=agent_run_id,
+            )
 
     def _create(
-        self, payload: CheckoutCreate, idempotency_key: str, customer: UserAccount
+        self,
+        payload: CheckoutCreate,
+        idempotency_key: str,
+        customer: UserAccount,
+        *,
+        source: str = "storefront",
+        agent_conversation_id: uuid.UUID | None = None,
+        agent_run_id: uuid.UUID | None = None,
     ) -> CheckoutOut:
         request_hash = self._request_hash(payload, customer.id)
         merchant = self.locations.merchant_by_slug(payload.merchant_slug)
@@ -140,6 +158,9 @@ class CheckoutService:
             postal_code=payload.postal_code,
             delivery_address=payload.delivery_address,
             expires_at=expires_at,
+            source=source,
+            agent_conversation_id=agent_conversation_id,
+            agent_run_id=agent_run_id,
         )
         self.db.add(checkout)
         self.db.flush()
@@ -630,4 +651,5 @@ class CheckoutService:
             total_minor=checkout.total_minor,
             quote_version=checkout.quote_version,
             expires_at=checkout.expires_at,
+            source=checkout.source,
         )

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.runtime import (
     AgentRuntimeResult,
-    GoogleAdkShoppingRuntime,
+    LangGraphShoppingRuntime,
     get_agent_runtime,
 )
 from app.agents.tools import AgentToolbox
@@ -301,7 +301,7 @@ async def test_interrupted_reply_after_cart_mutation_returns_safe_fallback(
     assert response.json()["message"]["structured_content"]["cart"]["item_count"] == 1
 
 
-def test_google_adk_runtime_registers_only_bounded_commerce_tools() -> None:
+def test_langgraph_runtime_registers_only_bounded_commerce_tools() -> None:
     toolbox = AgentToolbox(
         db=None,  # type: ignore[arg-type]
         customer=None,  # type: ignore[arg-type]
@@ -310,14 +310,13 @@ def test_google_adk_runtime_registers_only_bounded_commerce_tools() -> None:
         conversation_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
     )
-    runtime = GoogleAdkShoppingRuntime(
+    runtime = LangGraphShoppingRuntime(
         api_key="test-only-key",
         model_name="gemini-flash-latest",
         timeout_seconds=30,
         max_output_characters=6000,
     )
-    agent = runtime.build_agent(toolbox)
-    names = {getattr(tool, "__name__", "") for tool in agent.tools}
+    names = {tool.name for tool in runtime.build_tools(toolbox)}
     assert names == {
         "search_catalog",
         "recommend_products",

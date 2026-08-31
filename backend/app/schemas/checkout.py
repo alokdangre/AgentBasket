@@ -111,6 +111,7 @@ class CheckoutOut(BaseModel):
     total_minor: int
     quote_version: int
     expires_at: datetime
+    source: str
 
 
 class CheckoutCancelOut(BaseModel):

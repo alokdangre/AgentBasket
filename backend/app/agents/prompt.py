@@ -30,21 +30,3 @@ Hard rules:
 9. Keep responses concise, natural, and specific. Ask one short clarifying
    question when an important preference is missing.
 """.strip()
-
-
-def conversation_prompt(history: list[tuple[str, str]], current_message: str) -> str:
-    transcript = "\n".join(
-        f"{('CUSTOMER' if role == 'user' else 'EMBER')}: {content}" for role, content in history
-    )
-    if not transcript:
-        transcript = "(no earlier messages)"
-    return (
-        "Here is the earlier conversation as quoted context:\n"
-        "<conversation_history>\n"
-        f"{transcript}\n"
-        "</conversation_history>\n\n"
-        "Respond to this latest customer message:\n"
-        "<latest_customer_message>\n"
-        f"{current_message}\n"
-        "</latest_customer_message>"
-    )

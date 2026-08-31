@@ -217,6 +217,10 @@ export function ChatLauncher() {
                 message={message}
                 disabled={status !== "idle"}
                 onSuggestion={(suggestion) => void sendMessage(suggestion)}
+                onPaid={() => {
+                  window.dispatchEvent(new Event("cart:updated"));
+                  if (conversation) void refreshConversation(conversation.id);
+                }}
               />
             ))}
             {status === "loading" ? <p className={styles.agentStatus}>Opening your chat…</p> : null}
