@@ -117,6 +117,7 @@ class AP2ApprovalOut(BaseModel):
 
 class AP2ReceiptOut(BaseModel):
     id: uuid.UUID
+    order_id: uuid.UUID
     receipt_type: str
     status: str
     issuer: str

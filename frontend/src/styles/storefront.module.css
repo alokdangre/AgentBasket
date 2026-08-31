@@ -663,12 +663,21 @@
 
 .chatPanel {
   display: grid;
-  width: min(28rem, calc(100vw - 7rem));
+  width: min(31.5rem, calc(100vw - 7rem));
   height: min(44rem, calc(100vh - 3rem));
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   border: 1px solid var(--rule);
   background: var(--paper);
   box-shadow: 0 1.25rem 3rem rgba(36, 19, 15, 0.18);
+}
+
+.chatPanel[hidden] {
+  display: none;
+}
+
+.chatPanel:focus-visible {
+  outline: 2px solid var(--persimmon);
+  outline-offset: 2px;
 }
 
 .chatHeading {
@@ -786,7 +795,7 @@
 
 .agentProduct {
   display: grid;
-  grid-template-columns: 4.5rem minmax(0, 1fr);
+  grid-template-columns: 2.4rem minmax(0, 1fr);
   gap: 0.75rem;
   padding: 0.75rem 0;
   border-bottom: 1px solid var(--rule);
@@ -796,16 +805,15 @@
   color: var(--persimmon);
 }
 
-.agentProductImage {
-  position: relative;
-  display: block;
-  aspect-ratio: 1;
-  overflow: hidden;
-  background: var(--sand);
-}
-
-.agentProductImage img {
-  object-fit: cover;
+.agentProductIndex {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  border: 1px solid var(--rule);
+  color: var(--muted);
+  font-family: var(--font-display);
+  font-size: 0.8rem;
 }
 
 .agentProductCopy {
@@ -843,7 +851,6 @@
 .agentCommerceArtifact,
 .agentCheckoutArtifact {
   margin-top: 0.75rem;
-  padding: 0.8rem;
   border: 1px solid var(--rule);
   background: var(--cream);
 }
@@ -852,6 +859,7 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.65rem;
+  padding: 0.8rem;
 }
 
 .agentCommerceArtifact > div {
@@ -859,14 +867,12 @@
   flex-direction: column;
 }
 
-.agentCommerceArtifact span,
-.agentCheckoutArtifact > span {
+.agentCommerceArtifact span {
   color: var(--muted);
   font-size: 0.65rem;
 }
 
-.agentCommerceArtifact strong,
-.agentCheckoutArtifact > strong {
+.agentCommerceArtifact strong {
   font-family: var(--font-display);
   font-size: 1.15rem;
 }
@@ -882,28 +888,206 @@
   font-weight: 700;
 }
 
-.agentCheckoutArtifact > strong {
-  display: block;
-  margin-top: 0.15rem;
-  font-size: 1.6rem;
+.agentCheckoutArtifact {
+  overflow: hidden;
 }
 
-.agentCheckoutArtifact > p {
-  margin: 0.35rem 0 0.65rem;
+.agentPurchaseProgress {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  border-bottom: 1px solid var(--rule);
+  list-style: none;
+}
+
+.agentPurchaseProgress li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.55rem 0.35rem;
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: 0.56rem;
+  font-weight: 700;
 }
 
-.agentCheckoutArtifact > button,
-.agentAp2Approval button {
-  width: 100%;
-  min-height: 2.5rem;
-  border: 1px solid var(--persimmon);
-  background: var(--persimmon);
+.agentPurchaseProgress li + li {
+  border-left: 1px solid var(--rule);
+}
+
+.agentPurchaseProgress li span {
+  display: grid;
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 0.5rem;
+}
+
+.agentPurchaseProgress li[data-state="active"] {
+  color: var(--persimmon);
+}
+
+.agentPurchaseProgress li[data-state="complete"] {
+  color: var(--leaf);
+}
+
+.agentPurchaseProgress li[data-state="complete"] span {
+  background: var(--leaf);
   color: white;
-  font-size: 0.72rem;
+}
+
+.agentCheckoutHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.9rem 0.9rem 0.75rem;
+}
+
+.agentCheckoutHeader > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.agentCheckoutHeader span,
+.agentCheckoutHeader small,
+.agentFulfillmentSummary span,
+.agentEvidenceHash span,
+.agentAuthorizedPayment span {
+  color: var(--muted);
+  font-size: 0.6rem;
+  font-weight: 600;
+}
+
+.agentCheckoutHeader strong {
+  margin-top: 0.05rem;
+  font-family: var(--font-display);
+  font-size: 1.65rem;
+  line-height: 1;
+}
+
+.agentCheckoutHeader small {
+  padding-top: 0.2rem;
+}
+
+.agentCheckoutLines {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.agentCheckoutLines > div {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.9rem;
+}
+
+.agentCheckoutLines > div + div {
+  border-top: 1px solid var(--rule);
+}
+
+.agentCheckoutLines span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  font-size: 0.69rem;
+  font-weight: 600;
+}
+
+.agentCheckoutLines small {
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-weight: 400;
+}
+
+.agentCheckoutLines > div > strong {
+  flex: none;
+  font-size: 0.67rem;
+}
+
+.agentCheckoutTotals {
+  margin: 0;
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.agentCheckoutTotals > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--muted);
+  font-size: 0.64rem;
+}
+
+.agentCheckoutTotals dt,
+.agentCheckoutTotals dd {
+  margin: 0;
+}
+
+.agentCheckoutTotals .agentCheckoutTotal {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--rule);
+  color: var(--espresso);
+  font-weight: 700;
+}
+
+.agentFulfillmentSummary {
+  display: grid;
+  grid-template-columns: 1.5fr 0.85fr 0.85fr;
+  gap: 0.6rem;
+  padding: 0.7rem 0.9rem;
+}
+
+.agentFulfillmentSummary > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.agentFulfillmentSummary strong {
+  overflow: hidden;
+  margin-top: 0.12rem;
+  font-size: 0.65rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentQuoteExpiry {
+  margin: 0;
+  padding: 0 0.9rem 0.75rem;
+  color: var(--muted);
+  font-size: 0.61rem;
+  line-height: 1.4;
+}
+
+.agentPaymentPrimary,
+.agentPaymentSecondary {
+  width: calc(100% - 1.8rem);
+  min-height: 2.65rem;
+  margin: 0 0.9rem 0.9rem;
+  border: 1px solid var(--persimmon);
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
   font-weight: 700;
   cursor: pointer;
+}
+
+.agentPaymentPrimary {
+  background: var(--persimmon);
+  color: white;
+}
+
+.agentPaymentSecondary {
+  margin-top: -0.45rem;
+  background: transparent;
+  color: var(--persimmon);
 }
 
 .agentCheckoutArtifact button:disabled {
@@ -911,70 +1095,111 @@
   cursor: not-allowed;
 }
 
-.agentCheckoutLines {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  margin-top: 0.5rem;
-  padding-top: 0.45rem;
+.agentAp2Approval,
+.agentAuthorizedPayment {
+  padding-top: 0.75rem;
   border-top: 1px solid var(--rule);
 }
 
-.agentCheckoutLines span {
-  color: var(--espresso);
-  font-size: 0.68rem;
-}
-
-.agentAp2Approval {
+.agentMandatePair {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.55rem;
-  padding-top: 0.7rem;
-  border-top: 1px solid var(--rule);
+  padding: 0 0.9rem;
 }
 
-.agentAp2Approval > div {
+.agentMandatePair > div {
   display: flex;
   min-width: 0;
   flex-direction: column;
+  padding: 0.55rem;
+  border: 1px solid var(--rule);
+  background: var(--paper);
 }
 
-.agentAp2Approval span {
-  color: var(--muted);
-  font-size: 0.6rem;
+.agentMandatePair span {
+  color: var(--leaf);
+  font-size: 0.55rem;
+  font-weight: 700;
 }
 
-.agentAp2Approval strong {
+.agentMandatePair strong {
+  margin-top: 0.15rem;
+  font-size: 0.61rem;
+  line-height: 1.35;
+}
+
+.agentEvidenceHash {
+  display: flex;
+  flex-direction: column;
+  margin: 0.6rem 0.9rem 0;
+}
+
+.agentEvidenceHash code {
   overflow: hidden;
-  font-size: 0.68rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agentAp2Approval code {
-  grid-column: 1 / -1;
-  overflow: hidden;
-  padding: 0.35rem;
+  margin-top: 0.2rem;
+  padding: 0.4rem;
   background: var(--paper);
   color: var(--muted);
-  font-size: 0.58rem;
+  font-size: 0.55rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.agentAp2Approval button {
-  grid-column: 1 / -1;
+.agentAp2Approval > p,
+.agentAuthorizedPayment > p {
+  margin: 0.55rem 0.9rem 0.75rem;
+  color: var(--muted);
+  font-size: 0.61rem;
+  line-height: 1.4;
+}
+
+.agentAuthorizedPayment > div {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0.9rem;
+}
+
+.agentAuthorizedPayment > div strong {
+  color: var(--leaf);
+  font-size: 0.72rem;
+}
+
+.agentPaymentRecovery {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0 0.9rem 0.9rem;
+  padding: 0.65rem;
+  border-left: 2px solid var(--persimmon);
+  background: var(--paper);
+  font-size: 0.65rem;
+}
+
+.agentPaymentRecovery span {
+  color: var(--muted);
 }
 
 .agentPaymentStatus {
-  margin: 0.5rem 0 0 !important;
-  color: var(--espresso) !important;
+  margin: 0;
+  padding: 0.65rem 0.9rem;
+  border-top: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--muted);
+  font-size: 0.62rem;
+  line-height: 1.4;
+}
+
+.agentPaymentStatus[data-tone="success"] {
+  color: var(--leaf);
+}
+
+.agentPaymentStatus[data-tone="error"] {
+  color: #9a2d0a;
 }
 
 .agentPaymentReceipt {
-  margin-top: 0.75rem;
-  padding: 0.8rem;
-  border: 1px solid var(--leaf);
+  padding: 1rem 0.9rem;
   background: rgba(31, 86, 61, 0.08);
 }
 
@@ -1272,6 +1497,37 @@
 }
 
 @media (max-width: 720px) {
+  .chatWrap {
+    right: 1rem;
+    bottom: 1rem;
+  }
+
+  .chatPanel {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    bottom: 5.75rem;
+    left: 1rem;
+    width: auto;
+    height: auto;
+  }
+
+  .agentAssistantMessage {
+    padding-right: 0;
+  }
+
+  .agentMandatePair,
+  .agentFulfillmentSummary {
+    grid-template-columns: 1fr;
+  }
+
+  .agentPurchaseProgress li {
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.2rem;
+    text-align: center;
+  }
+
   .siteShell {
     --header-height: 4.5rem;
     --page-gutter: 1.25rem;

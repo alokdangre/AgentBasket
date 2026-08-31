@@ -272,6 +272,9 @@ async def test_ap2_approval_payment_and_signed_receipts_are_end_to_end(
         "checkout",
         "payment",
     }
+    assert {item["order_id"] for item in evidence["receipts"]} == {
+        verified.json()["id"]
+    }
     for receipt in evidence["receipts"]:
         signer = keys.merchant if receipt["receipt_type"] == "checkout" else keys.payment_processor
         claims = signer.verify(receipt["signed_jwt"], keys.audience, require_expiration=False)

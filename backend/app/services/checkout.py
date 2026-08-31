@@ -26,6 +26,7 @@ from app.db.models import (
     UserAccount,
 )
 from app.domain.enums import CheckoutStatus, FulfillmentType, ProductStatus, ReservationStatus
+from app.domain.fulfillment import supports_fulfillment
 from app.schemas.checkout import (
     CheckoutApprovalCreate,
     CheckoutApprovalOut,
@@ -144,6 +145,15 @@ class CheckoutService:
         variants = self._load_variants(merchant.id, [item.variant_id for item in payload.items])
         if len(variants) != len(set(item.variant_id for item in payload.items)):
             raise NotFoundError("variant_not_found", "One or more product variants are unavailable")
+        if any(
+            not supports_fulfillment(variant.product.attributes, payload.fulfillment_type)
+            for variant in variants.values()
+        ):
+            raise DomainError(
+                "fulfillment_not_supported",
+                f"One or more products cannot use {payload.fulfillment_type.value} fulfillment.",
+                422,
+            )
 
         expires_at = utc_now() + timedelta(minutes=self.settings.checkout_ttl_minutes)
         checkout = Checkout(

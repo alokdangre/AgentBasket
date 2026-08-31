@@ -28,7 +28,14 @@ and builds remain deterministic.
 
 Ask Ember is now a persistent, authenticated conversation surface available from every storefront
 page. It renders catalog-grounded product results, cart changes, exact checkout handoffs and the
-tool audit summary. It never receives the backend session token, Google API key or Razorpay secret.
+tool audit summary. Agent recommendations and payment controls are intentionally text-only for this
+phase. It never receives the backend session token, Google API key or Razorpay secret.
+
+The in-chat purchase surface renders Quote → AP2 Authorize → Razorpay Pay → Receipt as separate
+human actions. It shows every line/modifier, authoritative totals, destination, ETA and expiry;
+validates the provider-session amount against the approved quote; and rehydrates checkout, mandate
+and receipt evidence after panel close, reload or webhook reconciliation. Closing the chat hides it
+without destroying this payment state.
 
 Step 4 changes `/checkout/review` into a gated flow: calculate the exact server checkout, record
 the customer's exact-amount approval, open Razorpay Standard Checkout, then verify capture on

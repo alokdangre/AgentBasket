@@ -1,9 +1,8 @@
-import Image from "next/image";
 import Link from "next/link";
 
 import { AgentCheckoutPayment } from "@/components/agent-checkout-payment";
 import type { AgentMessage } from "@/lib/account-types";
-import { formatMoney, productImages } from "@/lib/storefront-data";
+import { formatMoney } from "@/lib/storefront-data";
 import styles from "@/styles/storefront.module.css";
 
 type AgentMessageViewProps = {
@@ -34,27 +33,29 @@ export function AgentMessageView({
 
       {products.length ? (
         <div className={styles.agentProducts}>
-          {products.map((product) => {
+          {products.map((product, index) => {
             const variant = product.variants.reduce(
               (lowest, candidate) =>
                 candidate.price_minor < lowest.price_minor ? candidate : lowest,
               product.variants[0],
             );
             if (!variant) return null;
-            const image = productImages[product.slug] ?? "/images/citrus-bloom.webp";
             return (
               <Link
                 href={`/shop?product=${product.slug}`}
                 className={styles.agentProduct}
                 key={product.id}
               >
-                <span className={styles.agentProductImage}>
-                  <Image src={image} alt="" fill sizes="72px" />
+                <span className={styles.agentProductIndex} aria-hidden="true">
+                  {String(index + 1).padStart(2, "0")}
                 </span>
                 <span className={styles.agentProductCopy}>
                   <strong>{product.name}</strong>
                   <span>{product.recommendation_reason ?? product.description}</span>
-                  <small>from {formatMoney(variant.price_minor, variant.currency)}</small>
+                  <small>
+                    {product.product_type.replaceAll("_", " ")} · from{" "}
+                    {formatMoney(variant.price_minor, variant.currency)}
+                  </small>
                 </span>
               </Link>
             );

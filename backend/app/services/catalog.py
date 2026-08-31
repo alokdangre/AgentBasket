@@ -1,12 +1,15 @@
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.errors import NotFoundError
 from app.db.models import InventoryItem, ModifierGroup, Product
-from app.domain.enums import ProductStatus
+from app.domain.enums import FulfillmentType, ProductStatus
+from app.domain.fulfillment import supports_fulfillment
 from app.schemas.catalog import (
     CatalogProductOut,
     CatalogResponse,
     ModifierGroupOut,
+    ModifierOptionOut,
     ProductVariantOut,
 )
 from app.services.location import LocationService
@@ -22,12 +25,33 @@ class CatalogService:
         merchant_slug: str,
         query: str | None = None,
         postal_code: str | None = None,
+        fulfillment_type: FulfillmentType = FulfillmentType.LOCAL_DELIVERY,
     ) -> CatalogResponse:
         merchant = self.locations.merchant_by_slug(merchant_slug)
         location = None
         if postal_code:
-            serviceable = self.locations.list_locations(merchant, postal_code)
-            location = serviceable[0] if serviceable else None
+            if fulfillment_type == FulfillmentType.PICKUP:
+                pickup_locations = self.locations.list_locations(merchant)
+                location = next(
+                    (
+                        candidate
+                        for candidate in pickup_locations
+                        if candidate.postal_code == postal_code
+                    ),
+                    None,
+                )
+                if location is None:
+                    raise NotFoundError(
+                        "pickup_location_not_found",
+                        f"No pickup location is available for postal code {postal_code}",
+                    )
+            else:
+                location, _ = self.locations.resolve_location(
+                    merchant=merchant,
+                    fulfillment_type=fulfillment_type,
+                    postal_code=postal_code,
+                    location_id=None,
+                )
 
         statement = (
             select(Product)
@@ -63,6 +87,8 @@ class CatalogService:
 
         output: list[CatalogProductOut] = []
         for product in products:
+            if not supports_fulfillment(product.attributes, fulfillment_type):
+                continue
             variants = [
                 ProductVariantOut(
                     id=variant.id,
@@ -100,7 +126,18 @@ class CatalogService:
                         image_urls=product.image_urls,
                         variants=variants,
                         modifier_groups=[
-                            ModifierGroupOut.model_validate(group)
+                            ModifierGroupOut(
+                                id=group.id,
+                                name=group.name,
+                                required=group.required,
+                                minimum_selections=group.minimum_selections,
+                                maximum_selections=group.maximum_selections,
+                                options=[
+                                    ModifierOptionOut.model_validate(option)
+                                    for option in group.options
+                                    if option.active
+                                ],
+                            )
                             for group in product.modifier_groups
                         ],
                     )

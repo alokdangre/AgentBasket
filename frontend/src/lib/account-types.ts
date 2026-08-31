@@ -331,6 +331,7 @@ export type AP2Evidence = {
   mandates: AP2MandateEvidence[];
   receipts: Array<{
     id: string;
+    order_id: string;
     receipt_type: "checkout" | "payment";
     status: "Success";
     issuer: string;

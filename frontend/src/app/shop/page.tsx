@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 
-import { ChatLauncher } from "@/components/chat-launcher";
 import { ProductCard } from "@/components/product-card";
 import { ProductPurchasePanel } from "@/components/product-purchase-panel";
 import { SiteFooter } from "@/components/site-footer";
@@ -60,7 +59,6 @@ export default async function Shop({ searchParams }: ShopProps) {
         </div>
       </main>
       <SiteFooter />
-      <ChatLauncher />
     </div>
   );
 }

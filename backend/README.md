@@ -48,6 +48,10 @@ The versioned API includes:
 
 Set the development-only `MERCHANT_ADMIN_*` values before running the seed command to create
 the first merchant administrator. Do not reuse those example credentials outside local setup.
+Optional `DEMO_CUSTOMER_*` values create a non-production shopper with serviceable home/office
+addresses and one deliberately unsupported postcode. The incremental seed supplies an imageless,
+recommendation-ready catalog and inventory edge cases, but never fakes carts, checkouts, payments,
+orders, AP2 evidence or audit events.
 
 For Razorpay, configure test-mode `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and a separate
 `RAZORPAY_WEBHOOK_SECRET`. Subscribe the test webhook to `payment.captured`, `payment.failed`
@@ -64,6 +68,13 @@ For AP2, configure separate ES256 P-256 private keys for the merchant, trusted s
 test-mode payment processor using the `AP2_*` settings in `.env.example`. The public keys are
 registered on first use. Agent-prepared checkouts fail closed when issuers are absent or do not
 match the trust registry. These test issuers are not a production passkey substitute.
+
+Generate three independent local keys with `python scripts/generate_ap2_test_keys.py` and paste
+the dotenv-safe output into `.env`. Razorpay does not issue these AP2 test keys.
+
+Razorpay MCP is not part of the customer payment runtime. Orders API, Standard Checkout,
+server-side verification and webhooks remain the payment path; the remote MCP server can later be
+connected separately to a permissioned merchant-operations agent.
 
 ## Tests
 

@@ -32,6 +32,8 @@ export function ChatLauncher() {
   const [error, setError] = useState<string | null>(null);
   const [needsSignIn, setNeedsSignIn] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const launcherRef = useRef<HTMLButtonElement>(null);
 
   const loadCurrentConversation = useCallback(async () => {
     setStatus("loading");
@@ -63,10 +65,15 @@ export function ChatLauncher() {
     if (!conversation && status === "idle") void loadCurrentConversation();
   }, [conversation, loadCurrentConversation, status]);
 
+  const closeAgent = useCallback(() => {
+    setOpen(false);
+    window.requestAnimationFrame(() => launcherRef.current?.focus());
+  }, []);
+
   useEffect(() => {
     const handleOpen = () => openAgent();
     const handleEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape" && open) closeAgent();
     };
     window.addEventListener("ask-ember:open", handleOpen);
     window.addEventListener("keydown", handleEscape);
@@ -74,7 +81,11 @@ export function ChatLauncher() {
       window.removeEventListener("ask-ember:open", handleOpen);
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [openAgent]);
+  }, [closeAgent, open, openAgent]);
+
+  useEffect(() => {
+    if (open) panelRef.current?.focus();
+  }, [open]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
@@ -178,63 +189,63 @@ export function ChatLauncher() {
 
   return (
     <aside id="ask-ember" className={styles.chatWrap}>
-      {open ? (
-        <section
-          className={styles.chatPanel}
-          role="dialog"
-          aria-label="Ask Ember shopping assistant"
-        >
-          <header className={styles.chatHeading}>
-            <div>
-              <strong>Ask Ember</strong>
-              <span>Live catalog · approval-gated checkout</span>
-            </div>
-            <div className={styles.chatHeadingActions}>
-              {conversation ? (
-                <button
-                  type="button"
-                  className={styles.chatNewButton}
-                  disabled={status !== "idle"}
-                  onClick={() => void createNewConversation()}
-                >
-                  New
-                </button>
-              ) : null}
+      <section
+        id="ask-ember-dialog"
+        ref={panelRef}
+        className={styles.chatPanel}
+        role="dialog"
+        aria-label="Ask Ember shopping assistant"
+        aria-modal="false"
+        tabIndex={-1}
+        hidden={!open}
+      >
+        <header className={styles.chatHeading}>
+          <div>
+            <strong>Ask Ember</strong>
+            <span>Live catalog · approval-gated checkout</span>
+          </div>
+          <div className={styles.chatHeadingActions}>
+            {conversation ? (
               <button
                 type="button"
-                aria-label="Close Ask Ember"
-                onClick={() => setOpen(false)}
-              >
-                <CloseIcon />
-              </button>
-            </div>
-          </header>
-
-          <div className={styles.agentMessages} aria-live="polite">
-            {messages.map((message) => (
-              <AgentMessageView
-                key={message.id}
-                message={message}
+                className={styles.chatNewButton}
                 disabled={status !== "idle"}
-                onSuggestion={(suggestion) => void sendMessage(suggestion)}
-                onPaid={() => {
-                  window.dispatchEvent(new Event("cart:updated"));
-                  if (conversation) void refreshConversation(conversation.id);
-                }}
-              />
-            ))}
-            {status === "loading" ? <p className={styles.agentStatus}>Opening your chat…</p> : null}
-            {status === "sending" ? (
-              <p className={styles.agentStatus}>Ember is checking the commerce core…</p>
+                onClick={() => void createNewConversation()}
+              >
+                New
+              </button>
             ) : null}
-            {error ? (
-              <div className={styles.agentError} role="status">
-                <p>{error}</p>
-                {needsSignIn ? <Link href="/account/sign-in?next=/">Sign in to chat</Link> : null}
-              </div>
-            ) : null}
-            <div ref={endRef} />
+            <button type="button" aria-label="Close Ask Ember" onClick={closeAgent}>
+              <CloseIcon />
+            </button>
           </div>
+        </header>
+
+        <div className={styles.agentMessages} aria-label="Conversation messages">
+          {messages.map((message) => (
+            <AgentMessageView
+              key={message.id}
+              message={message}
+              disabled={status !== "idle"}
+              onSuggestion={(suggestion) => void sendMessage(suggestion)}
+              onPaid={() => {
+                window.dispatchEvent(new Event("cart:updated"));
+                if (conversation) void refreshConversation(conversation.id);
+              }}
+            />
+          ))}
+          {status === "loading" ? <p className={styles.agentStatus}>Opening your chat…</p> : null}
+          {status === "sending" ? (
+            <p className={styles.agentStatus}>Ember is checking the commerce core…</p>
+          ) : null}
+          {error ? (
+            <div className={styles.agentError} role="status">
+              <p>{error}</p>
+              {needsSignIn ? <Link href="/account/sign-in?next=/">Sign in to chat</Link> : null}
+            </div>
+          ) : null}
+          <div ref={endRef} />
+        </div>
 
           <form className={styles.agentComposer} onSubmit={submit}>
             <label className={styles.srOnly} htmlFor="ask-ember-message">
@@ -260,14 +271,15 @@ export function ChatLauncher() {
           <p className={styles.agentBoundary}>
             Ember may update your cart. Approval and payment always stay with you.
           </p>
-        </section>
-      ) : null}
+      </section>
       <button
+        ref={launcherRef}
         type="button"
         className={styles.chatButton}
         aria-label={open ? "Close Ask Ember" : "Open Ask Ember"}
         aria-expanded={open}
-        onClick={() => (open ? setOpen(false) : openAgent())}
+        aria-controls="ask-ember-dialog"
+        onClick={() => (open ? closeAgent() : openAgent())}
       >
         {open ? <CloseIcon /> : <ChatIcon />}
       </button>

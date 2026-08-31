@@ -23,6 +23,18 @@ async def test_catalog_is_location_aware(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.anyio
+async def test_catalog_rejects_an_explicitly_unserviceable_postcode(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get(
+        "/api/v1/merchants/ember-and-leaf/catalog",
+        params={"postal_code": "999999"},
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "address_not_serviceable"
+
+
+@pytest.mark.anyio
 async def test_location_filter_rejects_unserviceable_postcode(
     client: httpx.AsyncClient,
 ) -> None:

@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     merchant_admin_email: str | None = None
     merchant_admin_password: str | None = Field(default=None, min_length=12)
     merchant_admin_name: str = "Merchant Owner"
+    demo_customer_email: str | None = None
+    demo_customer_password: SecretStr | None = Field(default=None, min_length=12)
+    demo_customer_name: str = "Aarav Mehta"
+    demo_customer_phone: str = "+919876543210"
     razorpay_key_id: str | None = None
     razorpay_key_secret: str | None = None
     razorpay_webhook_secret: str | None = None

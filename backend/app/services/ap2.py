@@ -793,6 +793,7 @@ class AP2Service:
     def _receipt_out(receipt: Ap2Receipt) -> AP2ReceiptOut:
         return AP2ReceiptOut(
             id=receipt.id,
+            order_id=receipt.order_id,
             receipt_type=receipt.receipt_type,
             status=receipt.status,
             issuer=receipt.issuer,
