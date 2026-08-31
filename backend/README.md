@@ -60,9 +60,17 @@ server-only; Standard Checkout receives only the public key ID and the exact pro
 created by the backend.
 
 For Ask Ember, set the backend-only `GOOGLE_API_KEY`. `AGENT_MODEL` defaults to
-`gemini-flash-latest`. LangGraph 1.2.11 owns only the bounded model/tool loop; the existing database
+`gemini-3.5-flash-lite`, a low-latency free-tier model suitable for the bounded commerce tool loop.
+LangGraph 1.2.11 owns only the bounded model/tool loop; the existing database
 owns conversations, idempotency and every commerce state. Live Gemini calls require your key; the
 automated suite uses a deterministic fake runtime while exercising the real tools and persistence.
+
+Optional LangSmith tracing uses `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY` and
+`LANGSMITH_PROJECT`. Create the key in LangSmith **Settings → API Keys**, keep it backend-only and
+restart FastAPI after changing `.env`. Inputs and outputs are hidden by default because shopping
+turns can contain addresses and order data; set `LANGSMITH_HIDE_INPUTS=false` and
+`LANGSMITH_HIDE_OUTPUTS=false` only with non-sensitive local test data. Trace metadata contains the
+local conversation/run IDs and model name so a failed request can be correlated with the audit log.
 
 For AP2, configure separate ES256 P-256 private keys for the merchant, trusted surface and
 test-mode payment processor using the `AP2_*` settings in `.env.example`. The public keys are

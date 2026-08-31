@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 import pytest
+from langchain_core.messages import AIMessage
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -51,6 +52,18 @@ class FailingRuntime(FakeRuntime):
             "Ask Ember is temporarily unavailable. No payment or approval was made.",
             503,
         )
+
+
+class CapturingGraph:
+    def __init__(self, *, timeout: bool = False) -> None:
+        self.timeout = timeout
+        self.config: dict[str, Any] | None = None
+
+    async def ainvoke(self, _: object, config: dict[str, Any]) -> dict[str, object]:
+        self.config = config
+        if self.timeout:
+            raise TimeoutError
+        return {"messages": [AIMessage(content="Catalog-grounded answer.")]}
 
 
 def _headers(seeded: dict[str, object]) -> dict[str, str]:
@@ -312,7 +325,7 @@ def test_langgraph_runtime_registers_only_bounded_commerce_tools() -> None:
     )
     runtime = LangGraphShoppingRuntime(
         api_key="test-only-key",
-        model_name="gemini-flash-latest",
+        model_name="gemini-3.5-flash-lite",
         timeout_seconds=30,
         max_output_characters=6000,
     )
@@ -329,3 +342,70 @@ def test_langgraph_runtime_registers_only_bounded_commerce_tools() -> None:
     }
     assert "approve_checkout" not in names
     assert "create_payment" not in names
+
+
+@pytest.mark.anyio
+async def test_langgraph_runtime_attaches_safe_trace_correlation_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = LangGraphShoppingRuntime(
+        api_key="test-only-key",
+        model_name="gemini-3.5-flash-lite",
+        timeout_seconds=30,
+        max_output_characters=6000,
+        tracing_environment="test",
+    )
+    graph = CapturingGraph()
+    monkeypatch.setattr(runtime, "build_graph", lambda _: graph)
+    conversation_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+
+    result = await runtime.run(
+        toolbox=None,  # type: ignore[arg-type]
+        history=[],
+        current_message="Recommend ginger tea.",
+        conversation_id=conversation_id,
+        user_id=uuid.uuid4(),
+        run_id=run_id,
+    )
+
+    assert result.text == "Catalog-grounded answer."
+    assert graph.config is not None
+    assert graph.config["run_name"] == "ask-ember-turn"
+    assert graph.config["metadata"] == {
+        "agent_run_id": str(run_id),
+        "conversation_id": str(conversation_id),
+        "model": "gemini-3.5-flash-lite",
+    }
+    assert "user_id" not in graph.config["metadata"]
+    assert "environment:test" in graph.config["tags"]
+
+
+@pytest.mark.anyio
+async def test_langgraph_runtime_reports_provider_timeout_without_money_action(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runtime = LangGraphShoppingRuntime(
+        api_key="test-only-key",
+        model_name="gemini-3.5-flash-lite",
+        timeout_seconds=30,
+        max_output_characters=6000,
+    )
+    graph = CapturingGraph(timeout=True)
+    monkeypatch.setattr(runtime, "build_graph", lambda _: graph)
+
+    with pytest.raises(DomainError) as failure:
+        await runtime.run(
+            toolbox=None,  # type: ignore[arg-type]
+            history=[],
+            current_message="Recommend ginger tea.",
+            conversation_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+        )
+
+    assert failure.value.code == "agent_provider_timeout"
+    assert failure.value.status_code == 503
+    assert "No payment or approval was made" in failure.value.message
+    assert "Ask Ember provider timeout" in caplog.text

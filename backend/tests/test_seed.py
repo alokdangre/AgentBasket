@@ -58,8 +58,9 @@ def demo_seed_environment(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DEMO_CUSTOMER_PASSWORD", "demo-customer-password-123")
     monkeypatch.setenv("DEMO_CUSTOMER_NAME", "Aarav Mehta")
     monkeypatch.setenv("DEMO_CUSTOMER_PHONE", "+919876543210")
-    monkeypatch.delenv("MERCHANT_ADMIN_EMAIL", raising=False)
-    monkeypatch.delenv("MERCHANT_ADMIN_PASSWORD", raising=False)
+    # Explicit environment values must override a developer's local .env during tests.
+    monkeypatch.setenv("MERCHANT_ADMIN_EMAIL", "")
+    monkeypatch.setenv("MERCHANT_ADMIN_PASSWORD", "unused-test-password")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -305,8 +306,8 @@ def test_production_seed_never_creates_demo_customer(
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("DEMO_CUSTOMER_EMAIL", "must-not-exist@example.com")
     monkeypatch.setenv("DEMO_CUSTOMER_PASSWORD", "demo-customer-password-123")
-    monkeypatch.delenv("MERCHANT_ADMIN_EMAIL", raising=False)
-    monkeypatch.delenv("MERCHANT_ADMIN_PASSWORD", raising=False)
+    monkeypatch.setenv("MERCHANT_ADMIN_EMAIL", "")
+    monkeypatch.setenv("MERCHANT_ADMIN_PASSWORD", "unused-test-password")
     get_settings.cache_clear()
 
     seed_database(session_factory=session_factory, reference_date=date(2026, 8, 31))

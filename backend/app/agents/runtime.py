@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from functools import lru_cache
@@ -18,11 +19,14 @@ from langchain_core.tools import BaseTool, StructuredTool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langsmith import Client, tracing_context
 
 from app.agents.prompt import SYSTEM_INSTRUCTION
 from app.agents.tools import AgentToolbox
 from app.core.config import get_settings
 from app.core.errors import DomainError
+
+logger = logging.getLogger(__name__)
 
 
 class ShoppingGraphState(TypedDict):
@@ -60,14 +64,19 @@ class LangGraphShoppingRuntime:
         model_name: str,
         timeout_seconds: float,
         max_output_characters: int,
+        tracing_client: Client | None = None,
+        tracing_project: str = "agentbasket-local",
+        tracing_environment: str = "development",
     ) -> None:
         self._model_name = model_name
         self._timeout_seconds = timeout_seconds
         self._max_output_characters = max_output_characters
+        self._tracing_client = tracing_client
+        self._tracing_project = tracing_project
+        self._tracing_environment = tracing_environment
         self._model = ChatGoogleGenerativeAI(
             model=model_name,
             google_api_key=api_key,
-            temperature=0.2,
             max_output_tokens=1200,
         )
 
@@ -140,20 +149,63 @@ class LangGraphShoppingRuntime:
         user_id: uuid.UUID,
         run_id: uuid.UUID,
     ) -> AgentRuntimeResult:
-        del conversation_id, user_id, run_id
+        del user_id
         messages: list[BaseMessage] = [SystemMessage(content=SYSTEM_INSTRUCTION)]
         for role, content in history:
             messages.append(
                 HumanMessage(content=content) if role == "user" else AIMessage(content=content)
             )
         messages.append(HumanMessage(content=current_message))
+        trace_tags = [
+            "ask-ember",
+            f"environment:{self._tracing_environment}",
+            f"model:{self._model_name}",
+        ]
+        trace_metadata = {
+            "agent_run_id": str(run_id),
+            "conversation_id": str(conversation_id),
+            "model": self._model_name,
+        }
         try:
-            async with asyncio.timeout(self._timeout_seconds):
-                state = await self.build_graph(toolbox).ainvoke(
-                    {"messages": messages},
-                    config={"recursion_limit": 16},
-                )
+            with tracing_context(
+                project_name=self._tracing_project,
+                tags=trace_tags,
+                metadata=trace_metadata,
+                enabled=self._tracing_client is not None,
+                client=self._tracing_client,
+            ):
+                async with asyncio.timeout(self._timeout_seconds):
+                    state = await self.build_graph(toolbox).ainvoke(
+                        {"messages": messages},
+                        config={
+                            "recursion_limit": 16,
+                            "run_name": "ask-ember-turn",
+                            "tags": trace_tags,
+                            "metadata": trace_metadata,
+                        },
+                    )
+        except TimeoutError as error:
+            logger.warning(
+                "Ask Ember provider timeout model=%s timeout_seconds=%s conversation_id=%s "
+                "run_id=%s",
+                self._model_name,
+                self._timeout_seconds,
+                conversation_id,
+                run_id,
+            )
+            raise DomainError(
+                "agent_provider_timeout",
+                "Ask Ember's model timed out. Try again shortly. No payment or approval was made.",
+                503,
+            ) from error
         except Exception as error:
+            logger.exception(
+                "Ask Ember runtime failed model=%s conversation_id=%s run_id=%s error_type=%s",
+                self._model_name,
+                conversation_id,
+                run_id,
+                type(error).__name__,
+            )
             raise DomainError(
                 "agent_temporarily_unavailable",
                 "Ask Ember is temporarily unavailable. No payment or approval was made.",
@@ -199,9 +251,26 @@ def get_agent_runtime() -> ShoppingAgentRuntime:
     settings = get_settings()
     if settings.google_api_key is None:
         return UnavailableShoppingRuntime()
+    tracing_client = None
+    langsmith_api_key = (
+        settings.langsmith_api_key.get_secret_value() if settings.langsmith_api_key else ""
+    )
+    if settings.langsmith_tracing and langsmith_api_key:
+        tracing_client = Client(
+            api_url=settings.langsmith_endpoint,
+            api_key=langsmith_api_key,
+            workspace_id=(settings.langsmith_workspace_id or "").strip() or None,
+            hide_inputs=settings.langsmith_hide_inputs,
+            hide_outputs=settings.langsmith_hide_outputs,
+        )
+    elif settings.langsmith_tracing:
+        logger.warning("LangSmith tracing requested without LANGSMITH_API_KEY; tracing is disabled")
     return LangGraphShoppingRuntime(
         api_key=settings.google_api_key.get_secret_value(),
         model_name=settings.agent_model,
         timeout_seconds=settings.agent_timeout_seconds,
         max_output_characters=settings.agent_max_output_characters,
+        tracing_client=tracing_client,
+        tracing_project=settings.langsmith_project,
+        tracing_environment=settings.app_env,
     )

@@ -24,10 +24,17 @@ class Settings(BaseSettings):
     razorpay_api_url: str = "https://api.razorpay.com/v1"
     razorpay_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
     google_api_key: SecretStr | None = None
-    agent_model: str = "gemini-flash-latest"
+    agent_model: str = "gemini-3.5-flash-lite"
     agent_timeout_seconds: float = Field(default=30.0, ge=5.0, le=60.0)
     agent_max_history_messages: int = Field(default=20, ge=4, le=40)
     agent_max_output_characters: int = Field(default=6000, ge=1000, le=12000)
+    langsmith_tracing: bool = False
+    langsmith_api_key: SecretStr | None = None
+    langsmith_project: str = "agentbasket-local"
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
+    langsmith_workspace_id: str | None = None
+    langsmith_hide_inputs: bool = True
+    langsmith_hide_outputs: bool = True
     ap2_audience: str = "agentbasket-commerce"
     ap2_challenge_ttl_seconds: int = Field(default=300, ge=60, le=900)
     ap2_merchant_issuer: str = "urn:agentbasket:merchant:ember-and-leaf"
