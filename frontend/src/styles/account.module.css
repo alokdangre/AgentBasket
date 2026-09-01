@@ -295,10 +295,47 @@
 }
 
 .profileForm,
-.addressManager {
+.addressManager,
+.passkeyManager {
   display: grid;
   gap: 1.5rem;
   margin-top: 2.5rem;
+}
+
+.passkeyManager {
+  align-items: start;
+}
+
+.passkeyList {
+  width: 100%;
+  border-top: 1px solid var(--rule);
+}
+
+.passkeyList > p {
+  margin: 0;
+  padding: 1.25rem 0;
+  color: var(--muted);
+}
+
+.passkeyRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.passkeyRow div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.passkeyRow span,
+.passkeyRow small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-transform: capitalize;
 }
 
 .formActions {

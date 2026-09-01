@@ -11,9 +11,11 @@ import {
   type ApiError,
   type Checkout,
   type OrderReceipt,
+  type PaymentInstrument,
   type RazorpaySession,
 } from "@/lib/account-types";
 import { loadRazorpayCheckout, type RazorpaySuccess } from "@/lib/razorpay-checkout";
+import { authenticatePasskey } from "@/lib/webauthn";
 import { formatMoney } from "@/lib/storefront-data";
 import styles from "@/styles/storefront.module.css";
 
@@ -54,6 +56,8 @@ export function AgentCheckoutPayment({
   const [evidence, setEvidence] = useState<AP2Evidence | null>(null);
   const [pending, setPending] = useState<Pending>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  const [paymentInstruments, setPaymentInstruments] = useState<PaymentInstrument[]>([]);
+  const [selectedInstrumentId, setSelectedInstrumentId] = useState<string>("");
 
   const refreshState = useCallback(
     async (announce: boolean, signal?: AbortSignal) => {
@@ -62,9 +66,13 @@ export function AgentCheckoutPayment({
         setNotice({ tone: "neutral", text: "Checking authoritative payment state…" });
       }
       try {
-        const [checkoutResponse, evidenceResponse] = await Promise.all([
+        const [checkoutResponse, evidenceResponse, instrumentsResponse] = await Promise.all([
           fetch(`/api/commerce/checkouts/${checkout.id}`, { cache: "no-store", signal }),
           fetch(`/api/commerce/checkouts/${checkout.id}/ap2/evidence`, {
+            cache: "no-store",
+            signal,
+          }),
+          fetch("/api/commerce/credential-provider/payment-instruments", {
             cache: "no-store",
             signal,
           }),
@@ -105,6 +113,17 @@ export function AgentCheckoutPayment({
             text: "No captured payment was found yet. A dismissed or failed attempt is safe to retry.",
           });
         }
+        if (instrumentsResponse.ok) {
+          const payload = (await instrumentsResponse.json()) as {
+            payment_instruments: PaymentInstrument[];
+          };
+          setPaymentInstruments(payload.payment_instruments);
+          setSelectedInstrumentId((current) =>
+            current || payload.payment_instruments.find((item) => item.is_default)?.id ||
+            payload.payment_instruments[0]?.id ||
+            "",
+          );
+        }
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
         if (announce) {
@@ -130,12 +149,17 @@ export function AgentCheckoutPayment({
   }, [refreshState]);
 
   async function requestChallenge() {
+    if (!selectedInstrumentId) {
+      setNotice({ tone: "error", text: "No eligible Credentials Provider method is available." });
+      return;
+    }
     setPending("challenge");
     setNotice(null);
     try {
       const response = await fetch(`/api/commerce/checkouts/${liveCheckout.id}/ap2/challenge`, {
         method: "POST",
-        headers: { "Idempotency-Key": challengeKey },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": challengeKey },
+        body: JSON.stringify({ payment_instrument_id: selectedInstrumentId }),
       });
       const result = (await response.json()) as AP2Challenge & ApiError;
       if (!response.ok) {
@@ -275,6 +299,7 @@ export function AgentCheckoutPayment({
     setPending("approve");
     setNotice({ tone: "neutral", text: "Verifying the closed Checkout and Payment Mandates…" });
     try {
+      const webauthnCredential = await authenticatePasskey(challenge.webauthn_options);
       const response = await fetch(`/api/commerce/checkouts/${liveCheckout.id}/ap2/approve`, {
         method: "POST",
         headers: {
@@ -289,6 +314,7 @@ export function AgentCheckoutPayment({
           expected_total_minor: liveCheckout.total_minor,
           currency: liveCheckout.currency,
           quote_version: liveCheckout.quote_version,
+          webauthn_credential: webauthnCredential,
         }),
       });
       const result = (await response.json()) as AP2Approval & ApiError;
@@ -304,7 +330,7 @@ export function AgentCheckoutPayment({
       setLiveCheckout((current) => ({ ...current, status: "approved" }));
       setNotice({
         tone: "success",
-        text: "Both AP2 mandates are verified. Razorpay has not opened yet.",
+        text: "Passkey, both AP2 mandates, and the CP grant are verified. Razorpay has not opened.",
       });
     } catch {
       setNotice({
@@ -438,14 +464,37 @@ export function AgentCheckoutPayment({
               <span>Ask Ember to prepare a fresh checkout with current price and inventory.</span>
             </div>
           ) : !challenge && !authorized ? (
-            <button
-              type="button"
-              className={styles.agentPaymentPrimary}
-              disabled={disabled || pending !== null}
-              onClick={() => void requestChallenge()}
-            >
-              {pending === "challenge" ? "Preparing exact terms…" : "Review AP2 authorization"}
-            </button>
+            <div className={styles.agentPaymentMethodGate}>
+              <label>
+                Credentials Provider method
+                <select
+                  value={selectedInstrumentId}
+                  disabled={disabled || pending !== null}
+                  onChange={(event) => {
+                    setSelectedInstrumentId(event.target.value);
+                    setChallengeKey(crypto.randomUUID());
+                  }}
+                >
+                  {paymentInstruments.map((instrument) => (
+                    <option key={instrument.id} value={instrument.id}>
+                      {instrument.alias}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <small>
+                This method releases a one-checkout grant. Razorpay Test Checkout still collects a
+                fake card or UPI authorization because Standard Checkout is hosted.
+              </small>
+              <button
+                type="button"
+                className={styles.agentPaymentPrimary}
+                disabled={disabled || pending !== null || !selectedInstrumentId}
+                onClick={() => void requestChallenge()}
+              >
+                {pending === "challenge" ? "Preparing exact terms…" : "Review AP2 authorization"}
+              </button>
+            </div>
           ) : !authorized && challenge ? (
             <div className={styles.agentAp2Approval}>
               <div className={styles.agentMandatePair}>
@@ -471,7 +520,7 @@ export function AgentCheckoutPayment({
               >
                 {pending === "approve"
                   ? "Verifying both mandates…"
-                  : `Authorize ${formatMoney(liveCheckout.total_minor, liveCheckout.currency)}`}
+                  : `Approve with passkey · ${formatMoney(liveCheckout.total_minor, liveCheckout.currency)}`}
               </button>
               <button
                 type="button"
@@ -488,7 +537,10 @@ export function AgentCheckoutPayment({
                 <span>AP2 authorization verified</span>
                 <strong>{mandateCount}/2 signed mandates</strong>
               </div>
-              <p>Razorpay receives only this authorized amount. The backend still verifies capture.</p>
+              <p>
+                CP grant: {approval?.credential_grant.instrument_alias ?? "verified"}. Test Mode
+                moves no money; use Razorpay&apos;s fake payment details in the hosted window.
+              </p>
               <button
                 type="button"
                 className={styles.agentPaymentPrimary}

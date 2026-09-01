@@ -20,6 +20,7 @@ from app.db.models import (
     Merchant,
     ModifierGroup,
     ModifierOption,
+    PaymentInstrument,
     Product,
     ProductVariant,
     ServiceZone,
@@ -151,6 +152,30 @@ def seed_demo_customer(db: Session) -> None:
         if default_address_id is None and label == "Home":
             address.is_default = True
             default_address_id = address.id
+
+    _upsert(
+        db,
+        PaymentInstrument,
+        {
+            "user_id": customer.id,
+            "provider": "razorpay_test",
+            "alias": "Razorpay Test Checkout",
+        },
+        {
+            "instrument_type": "com.razorpay.standard.test",
+            "provider_customer_id": None,
+            "provider_token_reference": None,
+            "network": None,
+            "last4": None,
+            "status": "active",
+            "is_default": True,
+            "instrument_metadata": {
+                "mode": "test",
+                "requires_provider_checkout": True,
+                "stores_pan": False,
+            },
+        },
+    )
 
 
 def _seed_locations(db: Session, merchant: Merchant) -> dict[str, Location]:

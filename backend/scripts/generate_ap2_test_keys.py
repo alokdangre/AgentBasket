@@ -1,4 +1,4 @@
-"""Print three independent P-256 test keys as dotenv-safe values.
+"""Print four independent P-256 test keys as dotenv-safe values.
 
 Run this locally and paste the output into backend/.env. The command never writes
 key material to disk, and these test issuers must not be reused in production.
@@ -9,7 +9,8 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 VARIABLES = (
     "AP2_MERCHANT_PRIVATE_KEY_PEM",
-    "AP2_TRUSTED_SURFACE_PRIVATE_KEY_PEM",
+    "AP2_AGENT_PROVIDER_PRIVATE_KEY_PEM",
+    "AP2_CREDENTIALS_PROVIDER_PRIVATE_KEY_PEM",
     "AP2_PAYMENT_PROCESSOR_PRIVATE_KEY_PEM",
 )
 

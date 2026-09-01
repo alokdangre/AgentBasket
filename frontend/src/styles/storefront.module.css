@@ -1980,3 +1980,30 @@
     font-size: 3rem;
   }
 }
+.agentPaymentMethodGate {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.agentPaymentMethodGate label {
+  display: grid;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.agentPaymentMethodGate select {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0 0.85rem;
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  background: var(--cream);
+  color: var(--espresso);
+}
+
+.agentPaymentMethodGate small {
+  color: var(--muted);
+  line-height: 1.5;
+}

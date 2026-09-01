@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, Header, Response
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, get_trusted_surface
 from app.core.database import get_db
 from app.core.errors import DomainError
 from app.db.models import UserAccount
@@ -18,7 +18,16 @@ from app.schemas.account import (
     RegisterRequest,
     UserResponse,
 )
+from app.schemas.trusted_surface import (
+    PasskeyListOut,
+    PasskeyOut,
+    PasskeyRegistrationOptionsOut,
+    PasskeyRegistrationVerify,
+    PaymentInstrumentListOut,
+)
 from app.services.account import AccountService
+from app.services.credentials_provider import CredentialsProviderService
+from app.services.trusted_surface import TrustedSurfaceService
 
 router = APIRouter(tags=["accounts"])
 
@@ -94,3 +103,39 @@ def delete_address(
 ) -> Response:
     AccountService(db).delete_address(user, address_id)
     return Response(status_code=204)
+
+
+@router.get("/me/passkeys", response_model=PasskeyListOut)
+def list_passkeys(
+    user: UserAccount = Depends(get_current_user),
+    trusted_surface: TrustedSurfaceService = Depends(get_trusted_surface),
+) -> PasskeyListOut:
+    return trusted_surface.list_passkeys(user)
+
+
+@router.post(
+    "/me/passkeys/registration/options",
+    response_model=PasskeyRegistrationOptionsOut,
+    status_code=201,
+)
+def create_passkey_registration(
+    user: UserAccount = Depends(get_current_user),
+    trusted_surface: TrustedSurfaceService = Depends(get_trusted_surface),
+) -> PasskeyRegistrationOptionsOut:
+    return trusted_surface.registration_options(user)
+
+
+@router.post("/me/passkeys/registration/verify", response_model=PasskeyOut, status_code=201)
+def verify_passkey_registration(
+    payload: PasskeyRegistrationVerify,
+    user: UserAccount = Depends(get_current_user),
+    trusted_surface: TrustedSurfaceService = Depends(get_trusted_surface),
+) -> PasskeyOut:
+    return trusted_surface.verify_registration(user, payload)
+
+
+@router.get("/credential-provider/payment-instruments", response_model=PaymentInstrumentListOut)
+def list_payment_instruments(
+    user: UserAccount = Depends(get_current_user), db: Session = Depends(get_db)
+) -> PaymentInstrumentListOut:
+    return CredentialsProviderService(db).list_instruments(user)

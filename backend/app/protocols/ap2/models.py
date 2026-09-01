@@ -6,6 +6,10 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
+# These payloads are the generated models from the official AP2 SDK pinned in
+# pyproject.toml. Keeping response wrappers local does not redefine mandates.
+from ap2.sdk.generated.checkout_mandate import CheckoutMandate
+from ap2.sdk.generated.payment_mandate import PaymentMandate
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.checkout import CheckoutApprovalOut
@@ -13,44 +17,6 @@ from app.schemas.checkout import CheckoutApprovalOut
 
 class AP2Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class Amount(AP2Model):
-    amount: int = Field(ge=0)
-    currency: str = Field(min_length=3, max_length=3)
-
-
-class Merchant(AP2Model):
-    id: str
-    name: str
-    website: str | None = None
-
-
-class PaymentInstrument(AP2Model):
-    id: str
-    type: str
-    description: str | None = None
-
-
-class CheckoutMandate(AP2Model):
-    vct: Literal["mandate.checkout.1"] = "mandate.checkout.1"
-    checkout_jwt: str
-    checkout_hash: str
-    iat: int | None = None
-    exp: int | None = None
-
-
-class PaymentMandate(AP2Model):
-    vct: Literal["mandate.payment.1"] = "mandate.payment.1"
-    transaction_id: str
-    payee: Merchant
-    pisp: dict[str, Any] | None = None
-    payment_amount: Amount
-    payment_instrument: PaymentInstrument
-    execution_date: str | None = None
-    risk_data: dict[str, Any] | None = None
-    iat: int | None = None
-    exp: int | None = None
 
 
 class CheckoutReceiptSuccess(AP2Model):
@@ -85,6 +51,11 @@ class AP2ChallengeOut(BaseModel):
     display: dict[str, Any]
     checkout_mandate: CheckoutMandate
     payment_mandate: PaymentMandate
+    webauthn_options: dict[str, Any]
+
+
+class AP2ChallengeCreate(BaseModel):
+    payment_instrument_id: uuid.UUID
 
 
 class AP2ApprovalCreate(BaseModel):
@@ -95,6 +66,15 @@ class AP2ApprovalCreate(BaseModel):
     expected_total_minor: int = Field(ge=0)
     currency: str = Field(min_length=3, max_length=3)
     quote_version: int = Field(ge=1)
+    webauthn_credential: dict[str, Any]
+
+
+class PaymentCredentialGrantOut(BaseModel):
+    id: uuid.UUID
+    credential_kind: str
+    instrument_alias: str
+    status: str
+    expires_at: datetime
 
 
 class AP2MandateOut(BaseModel):
@@ -113,6 +93,7 @@ class AP2ApprovalOut(BaseModel):
     checkout_hash: str
     approval: CheckoutApprovalOut
     mandates: list[AP2MandateOut]
+    credential_grant: PaymentCredentialGrantOut
 
 
 class AP2ReceiptOut(BaseModel):

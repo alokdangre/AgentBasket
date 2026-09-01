@@ -18,6 +18,7 @@ from app.db.models import (
     Merchant,
     ModifierGroup,
     ModifierOption,
+    PaymentInstrument,
     Product,
     ProductVariant,
     ServiceZone,
@@ -194,6 +195,17 @@ def seeded(session_factory: sessionmaker[Session]) -> dict[str, object]:
         )
         db.add(customer)
         db.flush()
+        payment_instrument = PaymentInstrument(
+            user_id=customer.id,
+            provider="razorpay_test",
+            instrument_type="com.razorpay.standard.test",
+            alias="Razorpay Test Checkout",
+            status="active",
+            is_default=True,
+            instrument_metadata={"mode": "test", "requires_provider_checkout": True},
+        )
+        db.add(payment_instrument)
+        db.flush()
         customer_token = "test-customer-session-token"
         db.add(
             AuthSession(
@@ -230,6 +242,7 @@ def seeded(session_factory: sessionmaker[Session]) -> dict[str, object]:
             "merchant_admin_email": merchant_admin.email,
             "merchant_admin_password": "merchant-password-123",
             "customer_id": customer.id,
+            "payment_instrument_id": payment_instrument.id,
             "customer_token": customer_token,
             "customer_address_id": address.id,
         }

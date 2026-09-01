@@ -43,9 +43,19 @@ class Settings(BaseSettings):
     ap2_trusted_surface_issuer: str = "urn:agentbasket:trusted-surface:test"
     ap2_trusted_surface_key_id: str = "agentbasket-surface-test-1"
     ap2_trusted_surface_private_key_pem: SecretStr | None = None
+    ap2_agent_provider_issuer: str | None = None
+    ap2_agent_provider_key_id: str | None = None
+    ap2_agent_provider_private_key_pem: SecretStr | None = None
+    ap2_credentials_provider_issuer: str = "urn:agentbasket:credentials-provider:test"
+    ap2_credentials_provider_key_id: str = "agentbasket-cp-test-1"
+    ap2_credentials_provider_private_key_pem: SecretStr | None = None
     ap2_payment_processor_issuer: str = "urn:agentbasket:payment-processor:razorpay-test"
     ap2_payment_processor_key_id: str = "agentbasket-processor-test-1"
     ap2_payment_processor_private_key_pem: SecretStr | None = None
+    webauthn_rp_id: str = "localhost"
+    webauthn_rp_name: str = "AgentBasket"
+    webauthn_expected_origin: str = "http://localhost:3000"
+    webauthn_challenge_ttl_seconds: int = Field(default=300, ge=60, le=900)
 
     model_config = SettingsConfigDict(
         env_file=".env",

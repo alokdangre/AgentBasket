@@ -15,6 +15,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -134,6 +135,61 @@ class CustomerAddress(TimestampMixin, Base):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     user: Mapped[UserAccount] = relationship(back_populates="addresses")
+
+
+class WebAuthnCredential(TimestampMixin, Base):
+    __tablename__ = "webauthn_credentials"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True
+    )
+    credential_id: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    public_key: Mapped[bytes] = mapped_column(LargeBinary)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0)
+    transports: Mapped[list[str]] = mapped_column(JSON, default=list)
+    device_type: Mapped[str] = mapped_column(String(32))
+    backed_up: Mapped[bool] = mapped_column(Boolean, default=False)
+    label: Mapped[str] = mapped_column(String(80), default="Passkey")
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WebAuthnCeremony(TimestampMixin, Base):
+    __tablename__ = "webauthn_ceremonies"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True
+    )
+    purpose: Mapped[str] = mapped_column(String(32), index=True)
+    challenge: Mapped[str] = mapped_column(String(256), unique=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PaymentInstrument(TimestampMixin, Base):
+    __tablename__ = "payment_instruments"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "provider", "instrument_type", name="uq_payment_instrument_provider_type"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    instrument_type: Mapped[str] = mapped_column(String(120))
+    alias: Mapped[str] = mapped_column(String(160))
+    provider_customer_id: Mapped[str | None] = mapped_column(String(120))
+    provider_token_reference: Mapped[str | None] = mapped_column(String(240))
+    network: Mapped[str | None] = mapped_column(String(40))
+    last4: Mapped[str | None] = mapped_column(String(4))
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    instrument_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class Location(TimestampMixin, Base):
@@ -590,6 +646,9 @@ class Ap2ConsentChallenge(TimestampMixin, Base):
     approval_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("checkout_approvals.id", ondelete="SET NULL"), unique=True
     )
+    payment_instrument_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("payment_instruments.id", ondelete="RESTRICT"), index=True
+    )
     idempotency_key: Mapped[str] = mapped_column(String(128))
     request_sha256: Mapped[str] = mapped_column(String(64))
     nonce: Mapped[str] = mapped_column(String(128), unique=True)
@@ -597,6 +656,7 @@ class Ap2ConsentChallenge(TimestampMixin, Base):
     checkout_hash: Mapped[str] = mapped_column(String(64), index=True)
     display_sha256: Mapped[str] = mapped_column(String(64))
     display_payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    webauthn_challenge: Mapped[str | None] = mapped_column(String(256), unique=True)
     status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -630,6 +690,37 @@ class Ap2Mandate(Base):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, index=True
+    )
+
+
+class PaymentCredentialGrant(TimestampMixin, Base):
+    __tablename__ = "payment_credential_grants"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="RESTRICT"), index=True
+    )
+    checkout_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("checkouts.id", ondelete="RESTRICT"), unique=True, index=True
+    )
+    payment_mandate_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("ap2_mandates.id", ondelete="RESTRICT"), unique=True
+    )
+    payment_instrument_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("payment_instruments.id", ondelete="RESTRICT"), index=True
+    )
+    token_sha256: Mapped[str] = mapped_column(String(64), unique=True)
+    signed_credential: Mapped[str] = mapped_column(Text)
+    credential_kind: Mapped[str] = mapped_column(String(80))
+    checkout_hash: Mapped[str] = mapped_column(String(64), index=True)
+    amount_minor: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(3))
+    status: Mapped[str] = mapped_column(String(24), default="issued", index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    presented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payment_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("payments.id", ondelete="SET NULL"), unique=True
     )
 
 

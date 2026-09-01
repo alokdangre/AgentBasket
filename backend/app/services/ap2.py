@@ -7,6 +7,10 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from ap2.sdk.generated.types.amount import Amount
+from ap2.sdk.generated.types.merchant import Merchant
+from ap2.sdk.generated.types.payment_instrument import PaymentInstrument
+from ap2.sdk.mandate import MandateClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -24,29 +28,31 @@ from app.db.models import (
     InventoryItem,
     Order,
     Payment,
+    PaymentCredentialGrant,
     UserAccount,
 )
 from app.db.models import (
     Merchant as MerchantRecord,
 )
+from app.db.models import PaymentInstrument as PaymentInstrumentRecord
 from app.domain.enums import CheckoutStatus, ReservationStatus
 from app.protocols.ap2.crypto import AP2KeySet, digest_b64url, digest_hex, get_ap2_key_set
 from app.protocols.ap2.models import (
-    Amount,
     AP2ApprovalCreate,
     AP2ApprovalOut,
+    AP2ChallengeCreate,
     AP2ChallengeOut,
     AP2EvidenceOut,
     AP2MandateOut,
     AP2ReceiptOut,
     CheckoutMandate,
     CheckoutReceiptSuccess,
-    Merchant,
-    PaymentInstrument,
     PaymentMandate,
     PaymentReceiptSuccess,
 )
 from app.schemas.checkout import CheckoutApprovalOut
+from app.services.credentials_provider import CredentialsProviderService
+from app.services.trusted_surface import TrustedSurfaceService
 
 
 def utc_now() -> datetime:
@@ -56,9 +62,15 @@ def utc_now() -> datetime:
 class AP2Service:
     """Human-present AP2 v0.2 gate around agent-prepared checkouts."""
 
-    def __init__(self, db: Session, keys: AP2KeySet | None = None) -> None:
+    def __init__(
+        self,
+        db: Session,
+        keys: AP2KeySet | None = None,
+        trusted_surface: TrustedSurfaceService | None = None,
+    ) -> None:
         self.db = db
         self._keys = keys
+        self.trusted_surface = trusted_surface or TrustedSurfaceService(db)
         self.settings = get_settings()
 
     @property
@@ -70,11 +82,16 @@ class AP2Service:
     def create_challenge(
         self,
         checkout_id: uuid.UUID,
+        payload: AP2ChallengeCreate,
         idempotency_key: str,
         customer: UserAccount,
     ) -> AP2ChallengeOut:
         request_sha256 = self._digest(
-            {"checkout_id": str(checkout_id), "customer_id": str(customer.id)}
+            {
+                "checkout_id": str(checkout_id),
+                "customer_id": str(customer.id),
+                "payment_instrument_id": str(payload.payment_instrument_id),
+            }
         )
         with self.db.begin():
             checkout = self._checkout(checkout_id, customer.id, lock=True)
@@ -92,7 +109,7 @@ class AP2Service:
                         "idempotency_key_reused",
                         "Idempotency-Key was used for a different AP2 challenge.",
                     )
-                return self._challenge_out(existing)
+                return self._challenge_out(existing, customer)
             if checkout.source != "agent":
                 raise ConflictError(
                     "ap2_agent_checkout_required",
@@ -116,6 +133,15 @@ class AP2Service:
             merchant = self.db.get(MerchantRecord, checkout.merchant_id)
             if merchant is None:
                 raise NotFoundError("merchant_not_found", "Merchant was not found.")
+            instrument = self.db.scalar(
+                select(PaymentInstrumentRecord).where(
+                    PaymentInstrumentRecord.id == payload.payment_instrument_id,
+                    PaymentInstrumentRecord.user_id == customer.id,
+                    PaymentInstrumentRecord.status == "active",
+                )
+            )
+            if instrument is None:
+                raise NotFoundError("payment_instrument_not_found", "Payment method was not found.")
             self._sync_trust_registry()
             issued_at = int(utc_now().timestamp())
             expires_at = min(
@@ -126,10 +152,14 @@ class AP2Service:
             checkout_jwt = self.keys.merchant.sign(checkout_claims)
             checkout_hash = digest_b64url(checkout_jwt)
             nonce = secrets.token_urlsafe(32)
-            display = self._display(checkout, merchant, checkout_hash)
+            webauthn_challenge, webauthn_options = self.trusted_surface.authentication_options(
+                customer
+            )
+            display = self._display(checkout, merchant, instrument, checkout_hash)
             challenge = Ap2ConsentChallenge(
                 checkout_id=checkout.id,
                 customer_id=customer.id,
+                payment_instrument_id=instrument.id,
                 idempotency_key=idempotency_key,
                 request_sha256=request_sha256,
                 nonce=nonce,
@@ -137,6 +167,7 @@ class AP2Service:
                 checkout_hash=checkout_hash,
                 display_sha256=self._digest(display),
                 display_payload=display,
+                webauthn_challenge=webauthn_challenge,
                 status="pending",
                 expires_at=expires_at,
             )
@@ -158,7 +189,7 @@ class AP2Service:
                     },
                 )
             )
-            return self._challenge_out(challenge)
+            return self._challenge_out(challenge, customer, webauthn_options)
 
     def approve(
         self,
@@ -215,41 +246,42 @@ class AP2Service:
                     )
                 )
             else:
+                if challenge.webauthn_challenge is None:
+                    raise ConflictError(
+                        "passkey_required", "Prepare fresh terms secured by a passkey."
+                    )
+                self.trusted_surface.verify_authentication(
+                    customer, challenge.webauthn_challenge, payload.webauthn_credential
+                )
                 now = utc_now()
                 issued_at = int(now.timestamp())
                 expires_at = int(self._as_utc(challenge.expires_at).timestamp())
-                subject = str(customer.id)
                 checkout_mandate = self._checkout_mandate(challenge, issued_at)
                 payment_mandate = self._payment_mandate(challenge, issued_at)
-                checkout_token = self.keys.trusted_surface.sign(
-                    {
-                        "iss": self.keys.trusted_surface.issuer,
-                        "sub": subject,
-                        "aud": self.keys.audience,
-                        "jti": f"ap2-checkout:{challenge.id}",
-                        "nonce": challenge.nonce,
-                        **checkout_mandate.model_dump(exclude_none=True),
-                    }
+                mandate_client = MandateClient()
+                checkout_token = mandate_client.create(
+                    payloads=[checkout_mandate],
+                    issuer_key=self.keys.trusted_surface.private_jwk,
                 )
-                payment_token = self.keys.trusted_surface.sign(
-                    {
-                        "iss": self.keys.trusted_surface.issuer,
-                        "sub": subject,
-                        "aud": self.keys.audience,
-                        "jti": f"ap2-payment:{challenge.id}",
-                        "nonce": challenge.nonce,
-                        **payment_mandate.model_dump(exclude_none=True),
-                    }
+                payment_token = mandate_client.create(
+                    payloads=[payment_mandate],
+                    issuer_key=self.keys.trusted_surface.private_jwk,
                 )
-                checkout_claims = self.keys.trusted_surface.verify(
-                    checkout_token, self.keys.audience
-                )
-                payment_claims = self.keys.trusted_surface.verify(payment_token, self.keys.audience)
+                verified_checkout = mandate_client.verify(
+                    checkout_token,
+                    self.keys.trusted_surface.public_jwk,
+                    payload_type=CheckoutMandate,
+                ).mandate_payload
+                verified_payment = mandate_client.verify(
+                    payment_token,
+                    self.keys.trusted_surface.public_jwk,
+                    payload_type=PaymentMandate,
+                ).mandate_payload
                 self._verify_closed_mandates(
                     challenge,
                     checkout,
-                    checkout_claims,
-                    payment_claims,
+                    verified_checkout,
+                    verified_payment,
                     issued_at,
                     expires_at,
                 )
@@ -273,6 +305,10 @@ class AP2Service:
                 ]
                 self.db.add_all(mandates)
                 self.db.flush()
+                payment_record = next(item for item in mandates if item.mandate_type == "payment")
+                grant = CredentialsProviderService(self.db, self.keys).issue_grant(
+                    challenge, checkout, customer, payment_record
+                )
                 checkout.status = CheckoutStatus.APPROVED
                 challenge.status = "accepted"
                 challenge.consumed_at = now
@@ -292,6 +328,7 @@ class AP2Service:
                                 "challenge_id": str(challenge.id),
                                 "checkout_hash": challenge.checkout_hash,
                                 "mandate_ids": [str(item.id) for item in mandates],
+                                "credential_grant_id": str(grant.id),
                             },
                         ),
                         AuditEvent(
@@ -506,8 +543,8 @@ class AP2Service:
         self,
         challenge: Ap2ConsentChallenge,
         checkout: Checkout,
-        checkout_claims: dict[str, Any],
-        payment_claims: dict[str, Any],
+        checkout_mandate: CheckoutMandate,
+        payment_mandate: PaymentMandate,
         issued_at: int,
         expires_at: int,
     ) -> None:
@@ -521,16 +558,8 @@ class AP2Service:
             or digest_b64url(challenge.checkout_jwt) != challenge.checkout_hash
         ):
             raise ConflictError("ap2_checkout_mismatch", "Merchant checkout evidence changed.")
-        checkout_mandate = CheckoutMandate.model_validate(
-            {key: checkout_claims.get(key) for key in CheckoutMandate.model_fields}
-        )
-        payment_mandate = PaymentMandate.model_validate(
-            {key: payment_claims.get(key) for key in PaymentMandate.model_fields}
-        )
         if (
-            checkout_claims.get("nonce") != challenge.nonce
-            or payment_claims.get("nonce") != challenge.nonce
-            or checkout_mandate.checkout_hash != challenge.checkout_hash
+            checkout_mandate.checkout_hash != challenge.checkout_hash
             or checkout_mandate.checkout_jwt != challenge.checkout_jwt
             or payment_mandate.transaction_id != challenge.checkout_hash
             or payment_mandate.payment_amount.amount != checkout.total_minor
@@ -566,7 +595,18 @@ class AP2Service:
             exp=int(self._as_utc(challenge.expires_at).timestamp()),
         )
 
-    def _challenge_out(self, challenge: Ap2ConsentChallenge) -> AP2ChallengeOut:
+    def _challenge_out(
+        self,
+        challenge: Ap2ConsentChallenge,
+        customer: UserAccount,
+        webauthn_options: dict[str, Any] | None = None,
+    ) -> AP2ChallengeOut:
+        if webauthn_options is None:
+            if challenge.webauthn_challenge is None:
+                raise ConflictError("passkey_required", "Prepare fresh terms secured by a passkey.")
+            _, webauthn_options = self.trusted_surface.authentication_options(
+                customer, challenge.webauthn_challenge
+            )
         return AP2ChallengeOut(
             id=challenge.id,
             checkout_id=challenge.checkout_id,
@@ -577,6 +617,7 @@ class AP2Service:
             display=challenge.display_payload,
             checkout_mandate=self._checkout_mandate(challenge),
             payment_mandate=self._payment_mandate(challenge),
+            webauthn_options=webauthn_options,
         )
 
     def _approval_out(self, challenge: Ap2ConsentChallenge) -> AP2ApprovalOut:
@@ -590,6 +631,16 @@ class AP2Service:
                 .order_by(Ap2Mandate.created_at)
             )
         )
+        grant = self.db.scalar(
+            select(PaymentCredentialGrant).where(
+                PaymentCredentialGrant.checkout_id == challenge.checkout_id
+            )
+        )
+        instrument = self.db.get(PaymentInstrumentRecord, challenge.payment_instrument_id)
+        if grant is None or instrument is None:
+            raise DomainError(
+                "ap2_credential_grant_missing", "AP2 credential evidence is incomplete.", 500
+            )
         return AP2ApprovalOut(
             challenge_id=challenge.id,
             checkout_hash=challenge.checkout_hash,
@@ -603,6 +654,7 @@ class AP2Service:
                 approved_at=approval.approved_at,
             ),
             mandates=[self._mandate_out(item) for item in mandates],
+            credential_grant=CredentialsProviderService.grant_out(grant, instrument),
         )
 
     def _mandate_record(
@@ -661,7 +713,8 @@ class AP2Service:
     def _sync_trust_registry(self) -> None:
         for role, signer in (
             ("merchant", self.keys.merchant),
-            ("trusted_surface", self.keys.trusted_surface),
+            ("agent_provider", self.keys.trusted_surface),
+            ("credentials_provider", self.keys.credentials_provider),
             ("payment_processor", self.keys.payment_processor),
         ):
             existing = self.db.scalar(
@@ -737,7 +790,10 @@ class AP2Service:
 
     @staticmethod
     def _display(
-        checkout: Checkout, merchant: MerchantRecord, checkout_hash: str
+        checkout: Checkout,
+        merchant: MerchantRecord,
+        instrument: PaymentInstrumentRecord,
+        checkout_hash: str,
     ) -> dict[str, Any]:
         option = next((item for item in checkout.fulfillment_options if item.selected), None)
         return {
@@ -769,9 +825,9 @@ class AP2Service:
             "currency": checkout.currency,
             "checkout_hash": checkout_hash,
             "payment_instrument": {
-                "id": "razorpay-standard-checkout",
-                "type": "com.razorpay.standard",
-                "description": "Payment instrument selected in Razorpay Standard Checkout",
+                "id": str(instrument.id),
+                "type": instrument.instrument_type,
+                "description": instrument.alias,
             },
             "expires_at": checkout.expires_at.isoformat(),
         }

@@ -26,6 +26,26 @@ export type Address = {
   is_default: boolean;
 };
 
+export type Passkey = {
+  id: string;
+  label: string;
+  device_type: string;
+  backed_up: boolean;
+  created_at: string;
+  last_used_at: string | null;
+};
+
+export type PaymentInstrument = {
+  id: string;
+  provider: string;
+  instrument_type: string;
+  alias: string;
+  network: string | null;
+  last4: string | null;
+  is_default: boolean;
+  requires_provider_checkout: boolean;
+};
+
 export type CartModifier = {
   id: string;
   name: string;
@@ -303,6 +323,7 @@ export type AP2Challenge = {
   };
   checkout_mandate: { vct: "mandate.checkout.1" };
   payment_mandate: { vct: "mandate.payment.1" };
+  webauthn_options: PublicKeyCredentialRequestOptionsJSON;
 };
 
 export type AP2MandateEvidence = {
@@ -321,6 +342,13 @@ export type AP2Approval = {
   checkout_hash: string;
   approval: CheckoutApproval;
   mandates: AP2MandateEvidence[];
+  credential_grant: {
+    id: string;
+    credential_kind: string;
+    instrument_alias: string;
+    status: string;
+    expires_at: string;
+  };
 };
 
 export type AP2Evidence = {

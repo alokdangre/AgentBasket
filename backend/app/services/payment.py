@@ -18,6 +18,7 @@ from app.db.models import (
     Merchant,
     Order,
     Payment,
+    PaymentCredentialGrant,
     UserAccount,
     WebhookEvent,
 )
@@ -43,6 +44,7 @@ from app.schemas.payment import (
     WebhookResultOut,
 )
 from app.services.ap2 import AP2Service
+from app.services.credentials_provider import CredentialsProviderService
 
 
 def utc_now() -> datetime:
@@ -86,7 +88,13 @@ class PaymentService:
                     raise ConflictError(
                         "approval_required", "Approve the exact checkout before payment."
                     )
-                AP2Service(self.db).require_verified_mandates(checkout, approval)
+                credential_grant = None
+                if checkout.source == "agent":
+                    ap2_service = AP2Service(self.db)
+                    ap2_service.require_verified_mandates(checkout, approval)
+                    credential_grant = CredentialsProviderService(
+                        self.db, ap2_service.keys
+                    ).require_grant(checkout, customer.id)
                 order = self.db.scalar(
                     select(Order).where(Order.checkout_id == checkout.id).with_for_update()
                 )
@@ -138,6 +146,9 @@ class PaymentService:
                         )
                     self._validate_created_order(provider_order, checkout, receipt)
                     payment.provider_order_id = provider_order.id
+                if credential_grant is not None and credential_grant.status == "issued":
+                    credential_grant.status = "presented"
+                    credential_grant.presented_at = utc_now()
                 transitioned = checkout.status != CheckoutStatus.PAYMENT_PENDING
                 checkout.status = CheckoutStatus.PAYMENT_PENDING
                 if transitioned:
@@ -155,6 +166,11 @@ class PaymentService:
                                 "provider_order_id": payment.provider_order_id,
                                 "amount_minor": payment.amount_minor,
                                 "currency": payment.currency,
+                                "credential_grant_id": (
+                                    str(credential_grant.id)
+                                    if credential_grant is not None
+                                    else None
+                                ),
                             },
                         )
                     )
@@ -401,6 +417,13 @@ class PaymentService:
         payment.failure_description = None
         order.status = OrderStatus.PAID
         checkout.status = CheckoutStatus.COMPLETED
+        grant = self.db.scalar(
+            select(PaymentCredentialGrant).where(PaymentCredentialGrant.checkout_id == checkout.id)
+        )
+        if grant is not None:
+            grant.status = "consumed"
+            grant.consumed_at = utc_now()
+            grant.payment_id = payment.id
         self._consume_reservations(checkout)
         self._subtract_checkout_from_cart(checkout)
         AP2Service(self.db).record_success_receipts(

@@ -9,6 +9,7 @@ from app.core.errors import DomainError
 from app.core.security import hash_session_token
 from app.db.models import AuthSession, UserAccount
 from app.domain.enums import UserRole
+from app.services.trusted_surface import TrustedSurfaceService
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -58,3 +59,7 @@ def get_merchant_admin(user: UserAccount = Depends(get_merchant_user)) -> UserAc
             "merchant_admin_required", "Merchant administrator access is required.", 403
         )
     return user
+
+
+def get_trusted_surface(db: Session = Depends(get_db)) -> TrustedSurfaceService:
+    return TrustedSurfaceService(db)

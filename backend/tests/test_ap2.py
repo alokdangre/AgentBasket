@@ -10,12 +10,14 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.api.dependencies import get_trusted_surface
 from app.db.models import (
     Ap2ConsentChallenge,
     Ap2Mandate,
     Ap2Receipt,
     Checkout,
     CheckoutApproval,
+    PaymentCredentialGrant,
     UserAccount,
 )
 from app.main import app
@@ -86,6 +88,31 @@ class FakeRazorpayGateway:
         ).hexdigest()
 
 
+class FakeTrustedSurface:
+    def authentication_options(
+        self, user: UserAccount, challenge_value: str | None = None
+    ) -> tuple[str, dict[str, Any]]:
+        del user
+        challenge = challenge_value or "test-webauthn-challenge"
+        return challenge, {
+            "challenge": challenge,
+            "rpId": "localhost",
+            "allowCredentials": [{"id": "test-passkey", "type": "public-key"}],
+            "userVerification": "required",
+        }
+
+    def verify_authentication(
+        self,
+        user: UserAccount,
+        expected_challenge: str,
+        credential_payload: dict[str, Any],
+    ) -> object:
+        del user
+        assert expected_challenge == "test-webauthn-challenge"
+        assert credential_payload == {"id": "test-passkey"}
+        return object()
+
+
 def _auth(seeded: dict[str, object]) -> dict[str, str]:
     return {"Authorization": f"Bearer {seeded['customer_token']}"}
 
@@ -94,6 +121,7 @@ def _keys() -> AP2KeySet:
     return AP2KeySet(
         merchant=AP2Signer.generate("urn:test:merchant", "merchant-key-1"),
         trusted_surface=AP2Signer.generate("urn:test:trusted-surface", "surface-key-1"),
+        credentials_provider=AP2Signer.generate("urn:test:cp", "cp-key-1"),
         payment_processor=AP2Signer.generate("urn:test:processor", "processor-key-1"),
         audience="agentbasket-commerce",
     )
@@ -138,6 +166,7 @@ async def _challenge(
     response = await client.post(
         f"/api/v1/checkouts/{checkout['id']}/ap2/challenge",
         headers={**_auth(seeded), "Idempotency-Key": "ap2-challenge-request-001"},
+        json={"payment_instrument_id": str(seeded["payment_instrument_id"])},
     )
     assert response.status_code == 201
     return response.json()
@@ -152,7 +181,12 @@ def _approval_body(checkout: dict[str, Any], challenge: dict[str, Any]) -> dict[
         "expected_total_minor": checkout["total_minor"],
         "currency": checkout["currency"],
         "quote_version": checkout["quote_version"],
+        "webauthn_credential": {"id": "test-passkey"},
     }
+
+
+def _enable_trusted_surface() -> None:
+    app.dependency_overrides[get_trusted_surface] = lambda: FakeTrustedSurface()
 
 
 @pytest.mark.anyio
@@ -182,6 +216,24 @@ async def test_agent_checkout_requires_verified_ap2_pair_before_payment(
 
 
 @pytest.mark.anyio
+async def test_agent_checkout_requires_registered_passkey_before_challenge(
+    client: httpx.AsyncClient,
+    seeded: dict[str, object],
+    session_factory: sessionmaker[Session],
+) -> None:
+    keys = _keys()
+    app.dependency_overrides[get_ap2_key_set] = lambda: keys
+    checkout = await _agent_checkout(client, seeded, session_factory)
+    response = await client.post(
+        f"/api/v1/checkouts/{checkout['id']}/ap2/challenge",
+        headers={**_auth(seeded), "Idempotency-Key": "ap2-passkey-required-001"},
+        json={"payment_instrument_id": str(seeded["payment_instrument_id"])},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "passkey_required"
+
+
+@pytest.mark.anyio
 async def test_ap2_rejects_changed_terms_and_consumes_challenge(
     client: httpx.AsyncClient,
     seeded: dict[str, object],
@@ -189,6 +241,7 @@ async def test_ap2_rejects_changed_terms_and_consumes_challenge(
 ) -> None:
     keys = _keys()
     app.dependency_overrides[get_ap2_key_set] = lambda: keys
+    _enable_trusted_surface()
     checkout = await _agent_checkout(client, seeded, session_factory)
     challenge = await _challenge(client, seeded, checkout)
     assert challenge["checkout_mandate"]["vct"] == "mandate.checkout.1"
@@ -221,6 +274,7 @@ async def test_ap2_approval_payment_and_signed_receipts_are_end_to_end(
 ) -> None:
     keys = _keys()
     app.dependency_overrides[get_ap2_key_set] = lambda: keys
+    _enable_trusted_surface()
     monkeypatch.setattr("app.services.ap2.get_ap2_key_set", lambda: keys)
     checkout = await _agent_checkout(client, seeded, session_factory)
     challenge = await _challenge(client, seeded, checkout)
@@ -239,6 +293,8 @@ async def test_ap2_approval_payment_and_signed_receipts_are_end_to_end(
     assert repeated.status_code == 200
     assert repeated.json()["approval"]["id"] == approved.json()["approval"]["id"]
     assert {item["verification_status"] for item in approved.json()["mandates"]} == {"verified"}
+    assert all("~" in item["signed_jwt"] for item in approved.json()["mandates"])
+    assert approved.json()["credential_grant"]["status"] == "issued"
 
     gateway = FakeRazorpayGateway()
     app.dependency_overrides[get_razorpay_gateway] = lambda: gateway
@@ -272,9 +328,7 @@ async def test_ap2_approval_payment_and_signed_receipts_are_end_to_end(
         "checkout",
         "payment",
     }
-    assert {item["order_id"] for item in evidence["receipts"]} == {
-        verified.json()["id"]
-    }
+    assert {item["order_id"] for item in evidence["receipts"]} == {verified.json()["id"]}
     for receipt in evidence["receipts"]:
         signer = keys.merchant if receipt["receipt_type"] == "checkout" else keys.payment_processor
         claims = signer.verify(receipt["signed_jwt"], keys.audience, require_expiration=False)
@@ -282,6 +336,14 @@ async def test_ap2_approval_payment_and_signed_receipts_are_end_to_end(
         assert claims["reference"] == receipt["reference"]
     with session_factory() as db:
         assert db.scalar(select(func.count()).select_from(Ap2Receipt)) == 2
+        grant = db.scalar(
+            select(PaymentCredentialGrant).where(
+                PaymentCredentialGrant.checkout_id == uuid.UUID(checkout["id"])
+            )
+        )
+        assert grant is not None
+        assert grant.status == "consumed"
+        assert grant.payment_id is not None
 
 
 @pytest.mark.anyio
@@ -292,6 +354,7 @@ async def test_expired_ap2_challenge_releases_checkout_without_approval(
 ) -> None:
     keys = _keys()
     app.dependency_overrides[get_ap2_key_set] = lambda: keys
+    _enable_trusted_surface()
     checkout = await _agent_checkout(client, seeded, session_factory)
     challenge = await _challenge(client, seeded, checkout)
     with session_factory() as db, db.begin():
@@ -321,6 +384,7 @@ async def test_tampered_merchant_checkout_jwt_is_rejected_before_approval(
 ) -> None:
     keys = _keys()
     app.dependency_overrides[get_ap2_key_set] = lambda: keys
+    _enable_trusted_surface()
     checkout = await _agent_checkout(client, seeded, session_factory)
     challenge = await _challenge(client, seeded, checkout)
     with session_factory() as db, db.begin():
