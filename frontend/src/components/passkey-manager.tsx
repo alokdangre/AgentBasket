@@ -44,7 +44,9 @@ export function PasskeyManager({ initialPasskeys }: { initialPasskeys: Passkey[]
         return;
       }
       setPasskeys((current) => [...current, verified]);
-      setMessage("Passkey added. Agent purchases now require your device approval.");
+      setMessage(
+        "Passkey added. Immediate purchases and one-time schedule setup now use device approval.",
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Passkey setup was interrupted.");
     } finally {

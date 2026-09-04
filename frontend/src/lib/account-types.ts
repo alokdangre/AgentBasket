@@ -44,6 +44,141 @@ export type PaymentInstrument = {
   last4: string | null;
   is_default: boolean;
   requires_provider_checkout: boolean;
+  recurring_ready: boolean;
+  recurring_status: string | null;
+};
+
+export type RazorpayRecurringAuthorizationSession = {
+  scheduled_purchase_id: string;
+  payment_instrument_id: string;
+  key_id: string;
+  provider_order_id: string;
+  provider_customer_id: string;
+  amount_minor: number;
+  max_amount_minor: number;
+  currency: string;
+  mandate_expires_at: string;
+  merchant_name: string;
+  description: string;
+  customer_name: string;
+  customer_email: string;
+  customer_phone: string;
+  recurring: true;
+};
+
+export type RazorpayRecurringAuthorizationResult = {
+  scheduled_purchase_id: string;
+  payment_instrument_id: string;
+  status: string;
+  provider_payment_id: string;
+  token_confirmation_pending: boolean;
+};
+
+export type PurchaseIntentStatus =
+  | "draft"
+  | "pending_provider_authorization"
+  | "active"
+  | "paused"
+  | "needs_attention"
+  | "completed"
+  | "expired"
+  | "revoked";
+
+export type ScheduledRunStatus =
+  | "pending"
+  | "claimed"
+  | "checkout_created"
+  | "notification_pending"
+  | "payment_pending"
+  | "succeeded"
+  | "requires_human_action"
+  | "failed"
+  | "skipped";
+
+export type ScheduleFrequency = "once" | "daily" | "weekly" | "monthly";
+
+export type ScheduledPurchaseRun = {
+  id: string;
+  scheduled_for: string;
+  status: ScheduledRunStatus;
+  attempt_count: number;
+  checkout_id: string | null;
+  order_id: string | null;
+  payment_id: string | null;
+  amount_minor: number;
+  currency: string;
+  provider_payment_after: string | null;
+  provider_order_id: string | null;
+  provider_payment_id: string | null;
+  failure_code: string | null;
+  failure_message: string | null;
+  evidence: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ScheduledPurchase = {
+  id: string;
+  merchant_slug: string;
+  status: PurchaseIntentStatus;
+  fulfillment_type: "pickup" | "local_delivery" | "shipping";
+  address_id: string | null;
+  location_id: string | null;
+  payment_instrument_id: string;
+  payment_instrument_alias: string;
+  constraints: Record<string, unknown>;
+  frequency: ScheduleFrequency;
+  interval_count: number;
+  timezone: string;
+  next_run_at: string | null;
+  next_execution_at: string | null;
+  expires_at: string;
+  max_occurrences: number;
+  successful_occurrences: number;
+  max_amount_minor: number;
+  max_total_minor: number;
+  spent_minor: number;
+  currency: string;
+  display: Record<string, unknown> | null;
+  display_sha256: string | null;
+  open_checkout_hash: string | null;
+  authorization_reference: string | null;
+  provider_ready: boolean;
+  authorized_at: string | null;
+  provider_authorized_at: string | null;
+  paused_at: string | null;
+  revoked_at: string | null;
+  last_failure_code: string | null;
+  last_failure_message: string | null;
+  created_at: string;
+  updated_at: string;
+  runs: ScheduledPurchaseRun[];
+};
+
+export type ScheduledPurchaseList = {
+  scheduled_purchases: ScheduledPurchase[];
+};
+
+export type ScheduledPurchaseChallenge = {
+  intent_id: string;
+  nonce: string;
+  display_sha256: string;
+  display: Record<string, unknown>;
+  expires_at: string;
+  agent_public_jwk: Record<string, unknown>;
+  webauthn_options: PublicKeyCredentialRequestOptionsJSON;
+};
+
+export type ScheduledPurchaseAuthorization = {
+  scheduled_purchase: ScheduledPurchase;
+  open_checkout_mandate: string;
+  open_payment_mandate: string;
+};
+
+export type ScheduledPurchaseAction = {
+  id: string;
+  status: PurchaseIntentStatus;
+  next_run_at: string | null;
 };
 
 export type CartModifier = {
@@ -123,7 +258,7 @@ export type Checkout = {
   total_minor: number;
   quote_version: number;
   expires_at: string;
-  source: "storefront" | "agent";
+  source: "storefront" | "agent" | "scheduled_agent";
 };
 
 export type CheckoutApproval = {
@@ -275,6 +410,7 @@ export type AgentStructuredContent = {
       preparation_minutes: number;
     }>;
   };
+  scheduled_purchase?: ScheduledPurchase;
   activity?: Array<{ tool: string; status: "success" | "error"; label: string }>;
 };
 

@@ -20,6 +20,9 @@ type RazorpayConstructor = new (options: {
   name: string;
   description: string;
   order_id: string;
+  customer_id?: string;
+  recurring?: boolean | 1;
+  method?: { upi: boolean };
   prefill: { name: string; email: string; contact?: string };
   theme: { color: string };
   retry: { enabled: boolean };

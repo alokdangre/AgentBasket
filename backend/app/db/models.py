@@ -38,6 +38,7 @@ from app.domain.enums import (
     ProductType,
     PurchaseIntentStatus,
     ReservationStatus,
+    ScheduledRunStatus,
     UserRole,
 )
 
@@ -804,21 +805,157 @@ class Payment(TimestampMixin, Base):
 
 class ScheduledPurchaseIntent(TimestampMixin, Base):
     __tablename__ = "scheduled_purchase_intents"
+    __table_args__ = (
+        UniqueConstraint(
+            "customer_id",
+            "idempotency_key",
+            name="uq_scheduled_intent_customer_idempotency",
+        ),
+        UniqueConstraint(
+            "customer_id",
+            "authorization_challenge_idempotency_key",
+            name="uq_scheduled_intent_customer_challenge_idempotency",
+        ),
+        CheckConstraint("interval_count > 0", name="ck_scheduled_intent_interval_positive"),
+        CheckConstraint("max_occurrences > 0", name="ck_scheduled_intent_occurrences_positive"),
+        CheckConstraint(
+            "successful_occurrences >= 0",
+            name="ck_scheduled_intent_successes_nonnegative",
+        ),
+        CheckConstraint("max_amount_minor >= 0", name="ck_scheduled_intent_order_cap"),
+        CheckConstraint("max_total_minor >= 0", name="ck_scheduled_intent_total_cap"),
+        CheckConstraint(
+            "max_total_minor >= max_amount_minor",
+            name="ck_scheduled_intent_total_covers_order",
+        ),
+        CheckConstraint("spent_minor >= 0", name="ck_scheduled_intent_spent_nonnegative"),
+        CheckConstraint(
+            "spent_minor <= max_total_minor",
+            name="ck_scheduled_intent_spent_within_budget",
+        ),
+        CheckConstraint(
+            "successful_occurrences <= max_occurrences",
+            name="ck_scheduled_intent_successes_within_limit",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     merchant_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("merchants.id", ondelete="RESTRICT"), index=True
     )
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="RESTRICT"), index=True
+    )
+    address_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("customer_addresses.id", ondelete="RESTRICT"), index=True
+    )
+    payment_instrument_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("payment_instruments.id", ondelete="RESTRICT"), index=True
+    )
+    location_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("locations.id", ondelete="RESTRICT"), index=True
+    )
     customer_reference: Mapped[str] = mapped_column(String(120), index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    request_sha256: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[PurchaseIntentStatus] = mapped_column(
-        Enum(PurchaseIntentStatus, native_enum=False), default=PurchaseIntentStatus.ACTIVE
+        Enum(PurchaseIntentStatus, native_enum=False),
+        default=PurchaseIntentStatus.DRAFT,
+        index=True,
     )
     constraints: Mapped[dict[str, Any]] = mapped_column(JSON)
+    fulfillment_type: Mapped[FulfillmentType | None] = mapped_column(
+        Enum(FulfillmentType, native_enum=False)
+    )
+    frequency: Mapped[str] = mapped_column(String(16), default="once")
+    interval_count: Mapped[int] = mapped_column(Integer, default=1)
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
+    max_occurrences: Mapped[int] = mapped_column(Integer, default=1)
+    successful_occurrences: Mapped[int] = mapped_column(Integer, default=0)
+    max_amount_minor: Mapped[int] = mapped_column(Integer, default=0)
+    max_total_minor: Mapped[int] = mapped_column(Integer, default=0)
+    spent_minor: Mapped[int] = mapped_column(Integer, default=0)
+    currency: Mapped[str] = mapped_column(String(3), default="INR")
+    address_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    address_sha256: Mapped[str | None] = mapped_column(String(64))
+    display_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    display_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    authorization_nonce: Mapped[str | None] = mapped_column(String(128), unique=True, index=True)
+    authorization_challenge_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    authorization_challenge_request_sha256: Mapped[str | None] = mapped_column(String(64))
+    approval_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    approval_request_sha256: Mapped[str | None] = mapped_column(String(64))
+    webauthn_challenge: Mapped[str | None] = mapped_column(String(256), unique=True)
+    authorization_challenge_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    agent_key_id: Mapped[str | None] = mapped_column(String(120))
+    agent_public_jwk: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    open_checkout_mandate: Mapped[str | None] = mapped_column(Text)
+    open_payment_mandate: Mapped[str | None] = mapped_column(Text)
+    open_checkout_hash: Mapped[str | None] = mapped_column(String(128), index=True)
     authorization_reference: Mapped[str | None] = mapped_column(String(200))
     payment_token_reference: Mapped[str | None] = mapped_column(String(200))
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    next_execution_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    authorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_authorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_failure_code: Mapped[str | None] = mapped_column(String(120))
+    last_failure_message: Mapped[str | None] = mapped_column(Text)
+
+
+class ScheduledPurchaseRun(TimestampMixin, Base):
+    __tablename__ = "scheduled_purchase_runs"
+    __table_args__ = (
+        UniqueConstraint("intent_id", "scheduled_for", name="uq_scheduled_run_intent_occurrence"),
+        UniqueConstraint("idempotency_key", name="uq_scheduled_run_idempotency"),
+        CheckConstraint("attempt_count >= 0", name="ck_scheduled_run_attempt_nonnegative"),
+        CheckConstraint("amount_minor >= 0", name="ck_scheduled_run_amount_nonnegative"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    intent_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("scheduled_purchase_intents.id", ondelete="CASCADE"), index=True
+    )
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[ScheduledRunStatus] = mapped_column(
+        Enum(ScheduledRunStatus, native_enum=False),
+        default=ScheduledRunStatus.PENDING,
+        index=True,
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    checkout_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("checkouts.id", ondelete="SET NULL"), unique=True, index=True
+    )
+    order_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("orders.id", ondelete="SET NULL"), unique=True, index=True
+    )
+    payment_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("payments.id", ondelete="SET NULL"), unique=True, index=True
+    )
+    amount_minor: Mapped[int] = mapped_column(Integer, default=0)
+    currency: Mapped[str] = mapped_column(String(3), default="INR")
+    merchant_checkout_jwt: Mapped[str | None] = mapped_column(Text)
+    merchant_checkout_hash: Mapped[str | None] = mapped_column(String(128), index=True)
+    closed_checkout_mandate: Mapped[str | None] = mapped_column(Text)
+    closed_payment_mandate: Mapped[str | None] = mapped_column(Text)
+    provider_notification_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    provider_payment_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    provider_order_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    provider_payment_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    failure_code: Mapped[str | None] = mapped_column(String(120), index=True)
+    failure_message: Mapped[str | None] = mapped_column(Text)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class AgentConversation(TimestampMixin, Base):
@@ -958,3 +1095,8 @@ class WebhookEvent(Base):
 
 Index("ix_audit_aggregate", AuditEvent.aggregate_type, AuditEvent.aggregate_id)
 Index("ix_inventory_variant_location", InventoryItem.variant_id, InventoryItem.location_id)
+Index(
+    "ix_scheduled_purchase_due",
+    ScheduledPurchaseIntent.status,
+    ScheduledPurchaseIntent.next_run_at,
+)

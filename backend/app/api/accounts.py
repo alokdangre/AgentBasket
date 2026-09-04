@@ -7,6 +7,10 @@ from app.api.dependencies import get_current_user, get_trusted_surface
 from app.core.database import get_db
 from app.core.errors import DomainError
 from app.db.models import UserAccount
+from app.payments.razorpay import (
+    RazorpayRecurringGateway,
+    get_razorpay_recurring_gateway,
+)
 from app.schemas.account import (
     AddressCreateRequest,
     AddressListResponse,
@@ -24,9 +28,13 @@ from app.schemas.trusted_surface import (
     PasskeyRegistrationOptionsOut,
     PasskeyRegistrationVerify,
     PaymentInstrumentListOut,
+    RazorpayRecurringAuthorizationOut,
+    RazorpayRecurringAuthorizationSessionOut,
+    RazorpayRecurringAuthorizationVerify,
 )
 from app.services.account import AccountService
 from app.services.credentials_provider import CredentialsProviderService
+from app.services.recurring_authorization import RazorpayRecurringAuthorizationService
 from app.services.trusted_surface import TrustedSurfaceService
 
 router = APIRouter(tags=["accounts"])
@@ -139,3 +147,34 @@ def list_payment_instruments(
     user: UserAccount = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> PaymentInstrumentListOut:
     return CredentialsProviderService(db).list_instruments(user)
+
+
+@router.post(
+    "/credential-provider/razorpay-upi-autopay/{intent_id}/session",
+    response_model=RazorpayRecurringAuthorizationSessionOut,
+    status_code=201,
+)
+def create_razorpay_recurring_authorization_session(
+    intent_id: uuid.UUID,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=8, max_length=128),
+    user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    gateway: RazorpayRecurringGateway = Depends(get_razorpay_recurring_gateway),
+) -> RazorpayRecurringAuthorizationSessionOut:
+    return RazorpayRecurringAuthorizationService(db).create_session(
+        intent_id, user, idempotency_key, gateway
+    )
+
+
+@router.post(
+    "/credential-provider/razorpay-upi-autopay/{intent_id}/verify",
+    response_model=RazorpayRecurringAuthorizationOut,
+)
+def verify_razorpay_recurring_authorization(
+    intent_id: uuid.UUID,
+    payload: RazorpayRecurringAuthorizationVerify,
+    user: UserAccount = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    gateway: RazorpayRecurringGateway = Depends(get_razorpay_recurring_gateway),
+) -> RazorpayRecurringAuthorizationOut:
+    return RazorpayRecurringAuthorizationService(db).verify(intent_id, user, payload, gateway)

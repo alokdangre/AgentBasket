@@ -37,6 +37,11 @@ validates the provider-session amount against the approved quote; and rehydrates
 and receipt evidence after panel close, reload or webhook reconciliation. Closing the chat hides it
 without destroying this payment state.
 
+For human-not-present purchases, Ember creates only a draft. The account page is the non-agentic
+Trusted Surface where the customer reviews the fixed products, destination, cadence and budgets,
+approves the delegation with a passkey, completes one UPI Autopay registration when required, and
+can later pause, resume or revoke it. The worker—not the chat model—executes each bounded run.
+
 Step 4 changes `/checkout/review` into a gated flow: calculate the exact server checkout, record
 the customer's exact-amount approval, open Razorpay Standard Checkout, then verify capture on
 the backend before showing the receipt. A dismissed or failed provider attempt leaves

@@ -5,12 +5,13 @@ import json
 import re
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.errors import DomainError
 from app.db.models import (
     AgentToolCall,
@@ -22,9 +23,12 @@ from app.db.models import (
 from app.domain.enums import FulfillmentType
 from app.schemas.cart import CartItemCreateRequest, CartItemUpdateRequest
 from app.schemas.checkout import CheckoutFromCartCreate
+from app.schemas.scheduled_purchase import ScheduledPurchaseDraftCreate
 from app.services.cart import CartService
 from app.services.catalog import CatalogService
 from app.services.checkout import CheckoutService
+from app.services.credentials_provider import CredentialsProviderService
+from app.services.scheduled_purchase import ScheduledPurchaseService
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
@@ -119,6 +123,56 @@ class AgentToolbox:
             """
             return self.prepare_checkout(fulfillment_type, address_id, location_id)
 
+        def list_scheduling_options() -> dict[str, Any]:
+            """List saved destinations, pickup locations, and payment methods.
+
+            Call before drafting a scheduled purchase. A listed payment method
+            can be selected for the draft, but unattended execution remains
+            blocked until Razorpay confirms a recurring authorization.
+            """
+            return self.list_scheduling_options()
+
+        def draft_scheduled_purchase(
+            items: list[dict[str, Any]],
+            fulfillment_type: str,
+            payment_instrument_id: str,
+            first_run_at: str,
+            expires_at: str,
+            frequency: str,
+            interval_count: int,
+            max_occurrences: int,
+            max_amount_minor: int,
+            max_total_minor: int,
+            timezone: str = "Asia/Kolkata",
+            address_id: str = "",
+            location_id: str = "",
+        ) -> dict[str, Any]:
+            """Draft a bounded scheduled purchase; never authorize or charge it.
+
+            Call only when the latest customer message explicitly asks to
+            schedule or repeat a purchase and supplies exact timing, occurrence,
+            per-order, and total-budget limits. Each items entry must contain
+            acceptable_variant_ids, quantity, and modifier_option_ids using IDs
+            returned by catalog tools. Use IDs from list_scheduling_options.
+            The trusted account UI separately displays and passkey-authorizes
+            the draft.
+            """
+            return self.draft_scheduled_purchase(
+                items=items,
+                fulfillment_type=fulfillment_type,
+                payment_instrument_id=payment_instrument_id,
+                first_run_at=first_run_at,
+                expires_at=expires_at,
+                frequency=frequency,
+                interval_count=interval_count,
+                max_occurrences=max_occurrences,
+                max_amount_minor=max_amount_minor,
+                max_total_minor=max_total_minor,
+                timezone=timezone,
+                address_id=address_id,
+                location_id=location_id,
+            )
+
         return [
             search_catalog,
             recommend_products,
@@ -128,6 +182,8 @@ class AgentToolbox:
             remove_cart_item,
             list_fulfillment_destinations,
             prepare_checkout,
+            list_scheduling_options,
+            draft_scheduled_purchase,
         ]
 
     def search_catalog(
@@ -204,6 +260,47 @@ class AgentToolbox:
             lambda: self._prepare_checkout(fulfillment_type, address_id, location_id),
         )
 
+    def list_scheduling_options(self) -> dict[str, Any]:
+        return self._invoke("list_scheduling_options", {}, self._list_scheduling_options)
+
+    def draft_scheduled_purchase(
+        self,
+        *,
+        items: list[dict[str, Any]],
+        fulfillment_type: str,
+        payment_instrument_id: str,
+        first_run_at: str,
+        expires_at: str,
+        frequency: str,
+        interval_count: int,
+        max_occurrences: int,
+        max_amount_minor: int,
+        max_total_minor: int,
+        timezone: str = "Asia/Kolkata",
+        address_id: str = "",
+        location_id: str = "",
+    ) -> dict[str, Any]:
+        input_payload = {
+            "items": items,
+            "fulfillment_type": fulfillment_type,
+            "payment_instrument_id": payment_instrument_id,
+            "first_run_at": first_run_at,
+            "expires_at": expires_at,
+            "frequency": frequency,
+            "interval_count": interval_count,
+            "max_occurrences": max_occurrences,
+            "max_amount_minor": max_amount_minor,
+            "max_total_minor": max_total_minor,
+            "timezone": timezone,
+            "address_id": address_id,
+            "location_id": location_id,
+        }
+        return self._invoke(
+            "draft_scheduled_purchase",
+            input_payload,
+            lambda: self._draft_scheduled_purchase(input_payload),
+        )
+
     def structured_content(self) -> dict[str, Any]:
         content: dict[str, Any] = {
             "activity": [
@@ -223,8 +320,12 @@ class AgentToolbox:
                 content["cart"] = payload["cart"]
             if "checkout" in payload:
                 content["checkout"] = payload["checkout"]
+            if "scheduled_purchase" in payload:
+                content["scheduled_purchase"] = payload["scheduled_purchase"]
             if "destinations" in payload:
                 content["destinations"] = payload["destinations"]
+            if "scheduling_options" in payload:
+                content["scheduling_options"] = payload["scheduling_options"]
         return content
 
     def _search_catalog(self, query: str, postal_code: str, max_price_minor: int) -> dict[str, Any]:
@@ -388,6 +489,52 @@ class AgentToolbox:
         )
         return {"status": "success", "checkout": checkout_payload}
 
+    def _list_scheduling_options(self) -> dict[str, Any]:
+        destinations = self._list_fulfillment_destinations()["destinations"]
+        instruments = CredentialsProviderService(self.db).list_instruments(self.customer)
+        lead_hours = get_settings().razorpay_recurring_notification_lead_hours
+        return {
+            "status": "success",
+            "scheduling_options": {
+                **destinations,
+                "payment_instruments": instruments.model_dump(mode="json")["payment_instruments"],
+                "minimum_notification_lead_hours": lead_hours,
+                "earliest_first_run_at": (
+                    utc_now() + timedelta(hours=lead_hours, minutes=1)
+                ).isoformat(),
+                "authorization_note": (
+                    "The draft still needs passkey approval. Unattended payment also needs "
+                    "a confirmed Razorpay recurring authorization and advance pre-debit "
+                    "notification."
+                ),
+            },
+        }
+
+    def _draft_scheduled_purchase(self, input_payload: dict[str, Any]) -> dict[str, Any]:
+        payload = ScheduledPurchaseDraftCreate.model_validate(
+            {
+                "merchant_slug": self.merchant_slug,
+                "currency": "INR",
+                **input_payload,
+                "address_id": input_payload["address_id"] or None,
+                "location_id": input_payload["location_id"] or None,
+            }
+        )
+        schedule = ScheduledPurchaseService(self.db).create_draft(
+            payload,
+            self.customer,
+            idempotency_key=f"agent-schedule-{self.run_id}",
+        )
+        schedule_payload = schedule.model_dump(mode="json")
+        schedule_payload.update(
+            {
+                "authorization_required": True,
+                "payment_started": False,
+                "review_url": "/account#scheduled-purchases",
+            }
+        )
+        return {"status": "success", "scheduled_purchase": schedule_payload}
+
     def _invoke(
         self,
         tool_name: str,
@@ -524,6 +671,8 @@ class AgentToolbox:
             "remove_cart_item": "Cart item removed",
             "list_fulfillment_destinations": "Delivery choices checked",
             "prepare_checkout": "Exact checkout prepared",
+            "list_scheduling_options": "Schedule boundaries checked",
+            "draft_scheduled_purchase": "Bounded schedule drafted",
         }
         label = labels.get(tool_name, "Commerce tool checked")
         return label if status == "success" else f"{label} — failed safely"

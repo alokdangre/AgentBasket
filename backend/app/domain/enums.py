@@ -66,10 +66,26 @@ class PaymentStatus(StrEnum):
 
 
 class PurchaseIntentStatus(StrEnum):
+    DRAFT = "draft"
+    PENDING_PROVIDER_AUTHORIZATION = "pending_provider_authorization"
     ACTIVE = "active"
     PAUSED = "paused"
+    NEEDS_ATTENTION = "needs_attention"
     COMPLETED = "completed"
     EXPIRED = "expired"
+    REVOKED = "revoked"
+
+
+class ScheduledRunStatus(StrEnum):
+    PENDING = "pending"
+    CLAIMED = "claimed"
+    CHECKOUT_CREATED = "checkout_created"
+    NOTIFICATION_PENDING = "notification_pending"
+    PAYMENT_PENDING = "payment_pending"
+    SUCCEEDED = "succeeded"
+    REQUIRES_HUMAN_ACTION = "requires_human_action"
+    FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 class UserRole(StrEnum):

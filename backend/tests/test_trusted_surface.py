@@ -32,5 +32,7 @@ async def test_registration_options_and_cp_instruments_are_customer_scoped(
             "last4": None,
             "is_default": True,
             "requires_provider_checkout": True,
+            "recurring_ready": False,
+            "recurring_status": None,
         }
     ]

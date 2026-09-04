@@ -2007,3 +2007,98 @@
   color: var(--muted);
   line-height: 1.5;
 }
+
+.agentScheduleArtifact {
+  margin-top: 0.75rem;
+  border: 1px solid var(--rule);
+  background: var(--cream);
+}
+
+.agentScheduleArtifact header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.8rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.agentScheduleArtifact header > div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.agentScheduleArtifact header span,
+.agentScheduleArtifact dt {
+  color: var(--muted);
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.agentScheduleArtifact header strong {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+}
+
+.agentScheduleArtifact header small {
+  max-width: 9rem;
+  color: var(--leaf);
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.agentScheduleArtifact header small[data-status="draft"],
+.agentScheduleArtifact header small[data-status="needs_attention"],
+.agentScheduleArtifact header small[data-status="pending_provider_authorization"] {
+  color: var(--persimmon);
+}
+
+.agentScheduleArtifact dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.agentScheduleArtifact dl > div {
+  min-width: 0;
+  padding: 0.65rem;
+}
+
+.agentScheduleArtifact dl > div + div {
+  border-left: 1px solid var(--rule);
+}
+
+.agentScheduleArtifact dt,
+.agentScheduleArtifact dd {
+  margin: 0;
+}
+
+.agentScheduleArtifact dd {
+  overflow-wrap: anywhere;
+  padding-top: 0.15rem;
+  font-size: 0.64rem;
+  font-weight: 700;
+}
+
+.agentScheduleArtifact p {
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  color: var(--muted);
+  font-size: 0.64rem;
+  line-height: 1.45;
+}
+
+.agentScheduleArtifact > a {
+  display: inline-block;
+  margin: 0 0.8rem 0.8rem;
+  padding-bottom: 0.1rem;
+  border-bottom: 1px solid currentcolor;
+  color: var(--persimmon);
+  font-size: 0.68rem;
+  font-weight: 700;
+}

@@ -17,6 +17,9 @@ services:
 
   api:
     build: ./backend
+    env_file:
+      - path: ./backend/.env
+        required: false
     environment:
       DATABASE_URL: postgresql+psycopg://agentbasket:agentbasket@postgres:5432/agentbasket
     ports:
@@ -24,6 +27,19 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  scheduled-worker:
+    build: ./backend
+    command: ["python", "-m", "app.workers.scheduled_purchases"]
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://agentbasket:agentbasket@postgres:5432/agentbasket
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   agentbasket_postgres:

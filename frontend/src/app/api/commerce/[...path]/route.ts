@@ -15,6 +15,8 @@ function isAllowed(method: string, path: string[]): boolean {
     "POST me/passkeys/registration/options",
     "POST me/passkeys/registration/verify",
     "GET credential-provider/payment-instruments",
+    "GET scheduled-purchases",
+    "POST scheduled-purchases",
     "GET cart",
     "POST cart/items",
     "POST checkouts/from-cart",
@@ -41,6 +43,32 @@ function isAllowed(method: string, path: string[]): boolean {
     path[0] === "checkouts" &&
     path[2] === "ap2" &&
     ["challenge", "approve"].includes(path[3]) &&
+    method === "POST"
+  ) {
+    return true;
+  }
+  if (
+    path.length === 4 &&
+    path[0] === "credential-provider" &&
+    path[1] === "razorpay-upi-autopay" &&
+    ["session", "verify"].includes(path[3]) &&
+    method === "POST"
+  ) {
+    return true;
+  }
+  if (
+    path.length === 4 &&
+    path[0] === "scheduled-purchases" &&
+    path[2] === "authorization" &&
+    ["challenge", "approve"].includes(path[3]) &&
+    method === "POST"
+  ) {
+    return true;
+  }
+  if (
+    path.length === 3 &&
+    path[0] === "scheduled-purchases" &&
+    ["pause", "resume", "revoke", "run-now"].includes(path[2]) &&
     method === "POST"
   ) {
     return true;
@@ -112,7 +140,9 @@ async function proxy(
   target.search = request.nextUrl.search;
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
   const idempotencyKey = request.headers.get("Idempotency-Key");
-  const timeoutMs = path[0] === "agent" ? 40000 : 8000;
+  const isLongRunningRequest =
+    path[0] === "agent" || (path[0] === "scheduled-purchases" && path[2] === "run-now");
+  const timeoutMs = isLongRunningRequest ? 40000 : 8000;
   try {
     const response = await fetch(target, {
       method: request.method,

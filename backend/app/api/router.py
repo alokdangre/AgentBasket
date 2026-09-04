@@ -10,6 +10,7 @@ from app.api import (
     merchants,
     operations,
     payments,
+    scheduled_purchases,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -22,3 +23,5 @@ api_router.include_router(cart.router)
 api_router.include_router(operations.router)
 api_router.include_router(payments.router)
 api_router.include_router(agent.router)
+api_router.include_router(scheduled_purchases.router)
+api_router.include_router(scheduled_purchases.merchant_router)

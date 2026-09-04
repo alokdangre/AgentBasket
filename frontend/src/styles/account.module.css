@@ -296,7 +296,8 @@
 
 .profileForm,
 .addressManager,
-.passkeyManager {
+.passkeyManager,
+.scheduleManager {
   display: grid;
   gap: 1.5rem;
   margin-top: 2.5rem;
@@ -304,6 +305,301 @@
 
 .passkeyManager {
   align-items: start;
+}
+
+.scheduleBoundary {
+  padding: 1.2rem 1.35rem;
+  border-left: 3px solid var(--leaf);
+  background: rgba(41, 79, 54, 0.07);
+}
+
+.scheduleBoundary strong {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+}
+
+.scheduleBoundary p {
+  max-width: 52rem;
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.scheduleList {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.scheduleCard {
+  border: 1px solid var(--rule);
+  background: var(--paper);
+}
+
+.scheduleCardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.scheduleCardHeader > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.scheduleCardHeader span,
+.scheduleTerms dt,
+.scheduleItems > span {
+  color: var(--muted);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.scheduleCardHeader h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  font-weight: 500;
+}
+
+.scheduleCardHeader > strong {
+  padding: 0.35rem 0.55rem;
+  background: rgba(41, 79, 54, 0.09);
+  color: var(--leaf);
+  font-size: 0.68rem;
+}
+
+.scheduleCardHeader > strong[data-status="draft"],
+.scheduleCardHeader > strong[data-status="pending_provider_authorization"],
+.scheduleCardHeader > strong[data-status="needs_attention"] {
+  background: rgba(223, 72, 20, 0.08);
+  color: var(--persimmon);
+}
+
+.scheduleCardHeader > strong[data-status="revoked"],
+.scheduleCardHeader > strong[data-status="expired"] {
+  background: var(--cream);
+  color: var(--muted);
+}
+
+.scheduleTerms {
+  padding: 1.25rem;
+}
+
+.scheduleItems {
+  display: grid;
+  gap: 0.3rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.scheduleItems strong {
+  font-size: 0.82rem;
+}
+
+.scheduleTerms dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+}
+
+.scheduleTerms dl > div {
+  min-width: 0;
+  padding: 0.9rem 0.8rem 0 0;
+}
+
+.scheduleTerms dt,
+.scheduleTerms dd {
+  margin: 0;
+}
+
+.scheduleTerms dd {
+  overflow-wrap: anywhere;
+  padding-top: 0.2rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.scheduleFailure {
+  margin: 0 1.25rem 1rem;
+  padding: 0.75rem 0.85rem;
+  border-left: 3px solid var(--persimmon);
+  background: rgba(223, 72, 20, 0.06);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.scheduleApproval {
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  background: var(--cream);
+}
+
+.scheduleApproval > div:first-child {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.scheduleApproval > div:first-child strong {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+}
+
+.scheduleApproval > div:first-child span,
+.scheduleApproval > p {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.scheduleApproval > p {
+  margin: 0;
+}
+
+.schedulePayload {
+  border: 1px solid var(--rule);
+  background: var(--paper);
+}
+
+.schedulePayload summary {
+  padding: 0.7rem 0.8rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.schedulePayload pre {
+  max-height: 16rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.8rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.64rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.scheduleActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  padding: 0 1.25rem 1.25rem;
+}
+
+.scheduleApproval .scheduleActions {
+  padding: 0;
+}
+
+.scheduleRevoke {
+  min-height: 3rem;
+  padding: 0 0.8rem;
+  border: 0;
+  border-bottom: 1px solid currentcolor;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.scheduleRevoke:hover {
+  color: var(--persimmon);
+}
+
+.scheduleRevoke:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.scheduleRuns {
+  border-top: 1px solid var(--rule);
+}
+
+.scheduleEvidence {
+  border-top: 1px solid var(--rule);
+}
+
+.scheduleEvidence summary {
+  padding: 0.9rem 1.25rem;
+  color: var(--leaf);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.scheduleEvidence > div {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0 1.25rem;
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--rule);
+}
+
+.scheduleEvidence > div:last-child {
+  padding-bottom: 1rem;
+}
+
+.scheduleEvidence span {
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+
+.scheduleEvidence code {
+  overflow-wrap: anywhere;
+  font-size: 0.65rem;
+}
+
+.scheduleRuns summary {
+  padding: 0.9rem 1.25rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.scheduleRuns ol {
+  margin: 0;
+  padding: 0 1.25rem 1rem;
+  list-style: none;
+}
+
+.scheduleRuns li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--rule);
+  font-size: 0.75rem;
+}
+
+.scheduleRuns li > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.scheduleRuns time {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.scheduleRuns small {
+  max-width: 36rem;
+  color: var(--persimmon);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.scheduleRuns li[data-status="failed"] strong,
+.scheduleRuns li[data-status="requires_human_action"] strong {
+  color: var(--persimmon);
 }
 
 .passkeyList {
@@ -1603,5 +1899,26 @@
   .orderHistoryList b {
     grid-row: 1 / 3;
     grid-column: 2;
+  }
+
+  .scheduleCardHeader {
+    display: grid;
+  }
+
+  .scheduleCardHeader > strong {
+    width: fit-content;
+  }
+
+  .scheduleTerms dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .scheduleActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .scheduleActions > button {
+    width: 100%;
   }
 }

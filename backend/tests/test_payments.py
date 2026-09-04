@@ -3,6 +3,7 @@ import hmac
 import json
 import uuid
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -10,14 +11,35 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
-from app.db.models import AuditEvent, Cart, InventoryItem, Order, Payment, WebhookEvent
-from app.domain.enums import OrderStatus, PaymentStatus
+from app.db.models import (
+    Ap2Receipt,
+    AuditEvent,
+    Cart,
+    Checkout,
+    InventoryItem,
+    InventoryReservation,
+    Order,
+    Payment,
+    PaymentInstrument,
+    ScheduledPurchaseIntent,
+    ScheduledPurchaseRun,
+    WebhookEvent,
+)
+from app.domain.enums import (
+    CheckoutStatus,
+    OrderStatus,
+    PaymentStatus,
+    PurchaseIntentStatus,
+    ReservationStatus,
+    ScheduledRunStatus,
+)
 from app.main import app
 from app.payments.razorpay import (
     RazorpayOrder,
     RazorpayPayment,
     get_razorpay_gateway,
 )
+from app.protocols.ap2.crypto import AP2KeySet, AP2Signer
 
 
 class FakeRazorpayGateway:
@@ -146,6 +168,99 @@ async def _session(
     return response.json()
 
 
+def _attach_scheduled_purchase(
+    session_factory: sessionmaker[Session],
+    seeded: dict[str, object],
+    checkout_id: str,
+    order_id: str,
+    intent_status: PurchaseIntentStatus,
+    *,
+    token_id: str = "token_scheduled_test",
+    provider_payment_id: str | None = None,
+    debit_submission_started: bool = True,
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
+    scheduled_for = datetime.now(UTC) + timedelta(hours=1)
+    suffix = intent_status.value
+    with session_factory() as db, db.begin():
+        checkout = db.get(Checkout, uuid.UUID(checkout_id))
+        order = db.get(Order, uuid.UUID(order_id))
+        assert checkout is not None and order is not None
+        payment = db.scalar(select(Payment).where(Payment.order_id == order.id))
+        assert payment is not None
+        instrument = db.get(PaymentInstrument, seeded["payment_instrument_id"])
+        assert instrument is not None
+        instrument.provider = "razorpay_test"
+        instrument.instrument_type = "com.razorpay.upi.autopay"
+        instrument.provider_customer_id = "cust_scheduled_test"
+        instrument.provider_token_reference = token_id
+        instrument.instrument_metadata = {
+            "token_status": "confirmed",
+            "registration_status": "confirmed",
+        }
+        checkout.source = "scheduled_agent"
+        payment.provider_payment_id = provider_payment_id
+        intent = ScheduledPurchaseIntent(
+            merchant_id=checkout.merchant_id,
+            customer_id=checkout.customer_id,
+            address_id=seeded["customer_address_id"],
+            payment_instrument_id=seeded["payment_instrument_id"],
+            location_id=checkout.location_id,
+            customer_reference=f"scheduled-failure-{suffix}",
+            idempotency_key=f"scheduled-failure-{suffix}",
+            request_sha256=f"request-{suffix}",
+            status=intent_status,
+            constraints={"items": [], "first_run_at": scheduled_for.isoformat()},
+            fulfillment_type=checkout.fulfillment_type,
+            frequency="weekly",
+            interval_count=1,
+            max_occurrences=4,
+            max_amount_minor=checkout.total_minor,
+            max_total_minor=checkout.total_minor * 4,
+            currency=checkout.currency,
+            payment_token_reference=token_id,
+            next_execution_at=scheduled_for,
+            expires_at=scheduled_for + timedelta(days=30),
+            last_failure_code=(
+                "customer_controlled_schedule"
+                if intent_status != PurchaseIntentStatus.ACTIVE
+                else None
+            ),
+            last_failure_message=(
+                "The customer controls this schedule."
+                if intent_status != PurchaseIntentStatus.ACTIVE
+                else None
+            ),
+        )
+        db.add(intent)
+        db.flush()
+        run = ScheduledPurchaseRun(
+            intent_id=intent.id,
+            scheduled_for=scheduled_for,
+            status=ScheduledRunStatus.PAYMENT_PENDING,
+            idempotency_key=f"scheduled-run-failure-{suffix}",
+            checkout_id=checkout.id,
+            order_id=order.id,
+            payment_id=payment.id,
+            amount_minor=payment.amount_minor,
+            currency=payment.currency,
+            provider_order_id=payment.provider_order_id,
+            provider_payment_id=provider_payment_id,
+            merchant_checkout_jwt="merchant-checkout-jwt",
+            closed_checkout_mandate="closed-checkout-mandate",
+            closed_payment_mandate="closed-payment-mandate",
+            evidence=(
+                {"debit_submission_started_at": datetime.now(UTC).isoformat()}
+                if debit_submission_started
+                else {}
+            ),
+        )
+        db.add(run)
+        db.flush()
+        reservations = [reservation for line in checkout.lines for reservation in line.reservations]
+        assert len(reservations) == 1
+        return intent.id, run.id, payment.id, reservations[0].id
+
+
 def _webhook_headers(raw: bytes, event_id: str, secret: str) -> dict[str, str]:
     signature = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
     return {
@@ -155,7 +270,14 @@ def _webhook_headers(raw: bytes, event_id: str, secret: str) -> dict[str, str]:
     }
 
 
-def _payment_event(event: str, order_id: str, payment_id: str, amount: int) -> bytes:
+def _payment_event(
+    event: str,
+    order_id: str,
+    payment_id: str,
+    amount: int,
+    *,
+    token_id: str | None = None,
+) -> bytes:
     entity = {
         "id": payment_id,
         "entity": "payment",
@@ -167,10 +289,22 @@ def _payment_event(event: str, order_id: str, payment_id: str, amount: int) -> b
         "error_code": "BAD_REQUEST_ERROR" if event == "payment.failed" else None,
         "error_description": "The payment attempt failed" if event == "payment.failed" else None,
     }
+    if token_id is not None:
+        entity["token_id"] = token_id
     return json.dumps(
         {"entity": "event", "event": event, "payload": {"payment": {"entity": entity}}},
         separators=(",", ":"),
     ).encode()
+
+
+def _scheduled_ap2_keys() -> AP2KeySet:
+    return AP2KeySet(
+        merchant=AP2Signer.generate("urn:test:merchant", "merchant-key-1"),
+        trusted_surface=AP2Signer.generate("urn:test:agent-provider", "agent-provider-key-1"),
+        credentials_provider=AP2Signer.generate("urn:test:cp", "cp-key-1"),
+        payment_processor=AP2Signer.generate("urn:test:processor", "processor-key-1"),
+        audience="agentbasket-commerce",
+    )
 
 
 @pytest.mark.anyio
@@ -427,3 +561,297 @@ async def test_webhooks_handle_failed_then_captured_duplicates_and_late_failure(
         assert inventory is not None
         assert inventory.on_hand_quantity == 1
         assert inventory.reserved_quantity == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("provider_response_recorded", [True, False])
+async def test_scheduled_capture_binds_exact_debit_including_early_webhook_race(
+    provider_response_recorded: bool,
+    client: httpx.AsyncClient,
+    seeded: dict[str, object],
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "webhook-test-secret"
+    monkeypatch.setattr(get_settings(), "razorpay_webhook_secret", secret)
+    monkeypatch.setattr("app.services.ap2.get_ap2_key_set", _scheduled_ap2_keys)
+    checkout = await _checkout_from_cart(client, seeded)
+    await _approve(client, seeded, checkout)
+    gateway = FakeRazorpayGateway()
+    payment_session = await _session(client, seeded, checkout, gateway)
+    provider_payment_id = (
+        "pay_scheduled_known" if provider_response_recorded else "pay_scheduled_early_webhook"
+    )
+    intent_id, run_id, payment_id, _ = _attach_scheduled_purchase(
+        session_factory,
+        seeded,
+        checkout["id"],
+        payment_session["order_id"],
+        PurchaseIntentStatus.ACTIVE,
+        provider_payment_id=(provider_payment_id if provider_response_recorded else None),
+    )
+    captured = _payment_event(
+        "payment.captured",
+        payment_session["provider_order_id"],
+        provider_payment_id,
+        119000,
+        token_id="token_scheduled_test",
+    )
+
+    response = await client.post(
+        "/api/v1/webhooks/razorpay",
+        content=captured,
+        headers=_webhook_headers(
+            captured,
+            f"evt-scheduled-captured-{provider_response_recorded}",
+            secret,
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "processed"
+    with session_factory() as db:
+        intent = db.get(ScheduledPurchaseIntent, intent_id)
+        run = db.get(ScheduledPurchaseRun, run_id)
+        payment = db.get(Payment, payment_id)
+        receipts = list(
+            db.scalars(select(Ap2Receipt).where(Ap2Receipt.checkout_id == run.checkout_id))
+        )
+        assert intent is not None and intent.successful_occurrences == 1
+        assert run is not None and run.status == ScheduledRunStatus.SUCCEEDED
+        assert run.provider_payment_id == provider_payment_id
+        assert payment is not None and payment.status == PaymentStatus.CAPTURED
+        assert payment.provider_payment_id == provider_payment_id
+        assert len(receipts) == 2
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("stored_payment_id", "webhook_payment_id", "webhook_token_id", "expected_code"),
+    [
+        (
+            "pay_scheduled_expected",
+            "pay_scheduled_unexpected",
+            "token_scheduled_test",
+            "scheduled_payment_binding_mismatch",
+        ),
+        (
+            "pay_scheduled_expected",
+            "pay_scheduled_expected",
+            "token_other_mandate",
+            "scheduled_payment_token_mismatch",
+        ),
+    ],
+)
+async def test_scheduled_capture_rejects_payment_or_token_mismatch_and_keeps_evidence(
+    stored_payment_id: str,
+    webhook_payment_id: str,
+    webhook_token_id: str,
+    expected_code: str,
+    client: httpx.AsyncClient,
+    seeded: dict[str, object],
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "webhook-test-secret"
+    monkeypatch.setattr(get_settings(), "razorpay_webhook_secret", secret)
+    checkout = await _checkout_from_cart(client, seeded)
+    await _approve(client, seeded, checkout)
+    gateway = FakeRazorpayGateway()
+    payment_session = await _session(client, seeded, checkout, gateway)
+    _, run_id, payment_id, _ = _attach_scheduled_purchase(
+        session_factory,
+        seeded,
+        checkout["id"],
+        payment_session["order_id"],
+        PurchaseIntentStatus.ACTIVE,
+        provider_payment_id=stored_payment_id,
+    )
+    captured = _payment_event(
+        "payment.captured",
+        payment_session["provider_order_id"],
+        webhook_payment_id,
+        119000,
+        token_id=webhook_token_id,
+    )
+    event_id = f"evt-{expected_code}"
+
+    response = await client.post(
+        "/api/v1/webhooks/razorpay",
+        content=captured,
+        headers=_webhook_headers(captured, event_id, secret),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == expected_code
+    with session_factory() as db:
+        run = db.get(ScheduledPurchaseRun, run_id)
+        payment = db.get(Payment, payment_id)
+        webhook = db.scalar(select(WebhookEvent).where(WebhookEvent.event_id == event_id))
+        assert run is not None and run.status == ScheduledRunStatus.PAYMENT_PENDING
+        assert run.provider_payment_id == stored_payment_id
+        assert payment is not None and payment.status == PaymentStatus.CREATED
+        assert payment.provider_payment_id == stored_payment_id
+        assert webhook is not None and not webhook.processed
+        assert expected_code in (webhook.failure_message or "")
+
+
+@pytest.mark.anyio
+async def test_scheduled_capture_without_debit_marker_is_rejected_and_audited(
+    client: httpx.AsyncClient,
+    seeded: dict[str, object],
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "webhook-test-secret"
+    monkeypatch.setattr(get_settings(), "razorpay_webhook_secret", secret)
+    checkout = await _checkout_from_cart(client, seeded)
+    await _approve(client, seeded, checkout)
+    gateway = FakeRazorpayGateway()
+    payment_session = await _session(client, seeded, checkout, gateway)
+    _, run_id, payment_id, _ = _attach_scheduled_purchase(
+        session_factory,
+        seeded,
+        checkout["id"],
+        payment_session["order_id"],
+        PurchaseIntentStatus.ACTIVE,
+        provider_payment_id="pay_without_submission_marker",
+        debit_submission_started=False,
+    )
+    captured = _payment_event(
+        "payment.captured",
+        payment_session["provider_order_id"],
+        "pay_without_submission_marker",
+        119000,
+        token_id="token_scheduled_test",
+    )
+    event_id = "evt-scheduled-missing-debit-marker"
+
+    response = await client.post(
+        "/api/v1/webhooks/razorpay",
+        content=captured,
+        headers=_webhook_headers(captured, event_id, secret),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "scheduled_debit_submission_missing"
+    with session_factory() as db:
+        run = db.get(ScheduledPurchaseRun, run_id)
+        payment = db.get(Payment, payment_id)
+        webhook = db.scalar(select(WebhookEvent).where(WebhookEvent.event_id == event_id))
+        assert run is not None and run.status == ScheduledRunStatus.PAYMENT_PENDING
+        assert payment is not None and payment.status == PaymentStatus.CREATED
+        assert webhook is not None and not webhook.processed
+        assert "scheduled_debit_submission_missing" in (webhook.failure_message or "")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("intent_status", "expected_status"),
+    [
+        (PurchaseIntentStatus.ACTIVE, PurchaseIntentStatus.NEEDS_ATTENTION),
+        (PurchaseIntentStatus.PAUSED, PurchaseIntentStatus.PAUSED),
+        (PurchaseIntentStatus.REVOKED, PurchaseIntentStatus.REVOKED),
+    ],
+)
+async def test_scheduled_payment_failure_releases_stock_and_preserves_control_state(
+    intent_status: PurchaseIntentStatus,
+    expected_status: PurchaseIntentStatus,
+    client: httpx.AsyncClient,
+    seeded: dict[str, object],
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "webhook-test-secret"
+    monkeypatch.setattr(get_settings(), "razorpay_webhook_secret", secret)
+    checkout = await _checkout_from_cart(client, seeded)
+    await _approve(client, seeded, checkout)
+    gateway = FakeRazorpayGateway()
+    session = await _session(client, seeded, checkout, gateway)
+    intent_id, run_id, payment_id, reservation_id = _attach_scheduled_purchase(
+        session_factory,
+        seeded,
+        checkout["id"],
+        session["order_id"],
+        intent_status,
+    )
+    failed = _payment_event(
+        "payment.failed",
+        session["provider_order_id"],
+        f"pay_scheduled_failed_{intent_status.value}",
+        119000,
+    )
+
+    response = await client.post(
+        "/api/v1/webhooks/razorpay",
+        content=failed,
+        headers=_webhook_headers(failed, f"evt-scheduled-failed-{intent_status.value}", secret),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "processed"
+    late_capture = _payment_event(
+        "payment.captured",
+        session["provider_order_id"],
+        f"pay_scheduled_late_capture_{intent_status.value}",
+        119000,
+    )
+    late_event_id = f"evt-scheduled-late-capture-{intent_status.value}"
+    late_response = await client.post(
+        "/api/v1/webhooks/razorpay",
+        content=late_capture,
+        headers=_webhook_headers(
+            late_capture,
+            late_event_id,
+            secret,
+        ),
+    )
+    assert late_response.status_code == 409
+    assert late_response.json()["error"]["code"] == "scheduled_payment_terminal"
+    late_retry = await client.post(
+        "/api/v1/webhooks/razorpay",
+        content=late_capture,
+        headers=_webhook_headers(late_capture, late_event_id, secret),
+    )
+    assert late_retry.status_code == 409
+    assert late_retry.json()["error"]["code"] == "scheduled_payment_terminal"
+    with session_factory() as db:
+        intent = db.get(ScheduledPurchaseIntent, intent_id)
+        run = db.get(ScheduledPurchaseRun, run_id)
+        checkout_row = db.get(Checkout, uuid.UUID(checkout["id"]))
+        order = db.get(Order, uuid.UUID(session["order_id"]))
+        payment = db.get(Payment, payment_id)
+        reservation = db.get(InventoryReservation, reservation_id)
+        inventory = db.get(InventoryItem, seeded["inventory_id"])
+        failure_audit = db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.event_type == "payment.failed",
+                AuditEvent.aggregate_id == str(payment_id),
+            )
+        )
+        unreconciled_event = db.scalar(
+            select(WebhookEvent).where(WebhookEvent.event_id == late_event_id)
+        )
+        unreconciled_count = len(
+            list(db.scalars(select(WebhookEvent).where(WebhookEvent.event_id == late_event_id)))
+        )
+        assert intent is not None and intent.status == expected_status
+        if intent_status == PurchaseIntentStatus.ACTIVE:
+            assert intent.last_failure_code == "BAD_REQUEST_ERROR"
+        else:
+            assert intent.last_failure_code == "customer_controlled_schedule"
+        assert run is not None and run.status == ScheduledRunStatus.REQUIRES_HUMAN_ACTION
+        assert checkout_row is not None and checkout_row.status == CheckoutStatus.CANCELED
+        assert order is not None and order.status == OrderStatus.CANCELED
+        assert payment is not None and payment.status == PaymentStatus.FAILED
+        assert reservation is not None and reservation.status == ReservationStatus.RELEASED
+        assert inventory is not None
+        assert inventory.on_hand_quantity == 2
+        assert inventory.reserved_quantity == 0
+        assert failure_audit is not None
+        assert failure_audit.payload["released_reservations"] == 1
+        assert failure_audit.payload["checkout_status"] == CheckoutStatus.CANCELED.value
+        assert failure_audit.payload["order_status"] == OrderStatus.CANCELED.value
+        assert unreconciled_event is not None and not unreconciled_event.processed
+        assert "scheduled_payment_terminal" in unreconciled_event.failure_message
+        assert unreconciled_count == 1

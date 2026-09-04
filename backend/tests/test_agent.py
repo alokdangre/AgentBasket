@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -22,6 +23,8 @@ from app.db.models import (
     Checkout,
     CheckoutApproval,
     Order,
+    PaymentInstrument,
+    ScheduledPurchaseIntent,
 )
 from app.main import app
 
@@ -247,6 +250,73 @@ async def test_agent_prepares_checkout_but_cannot_approve_or_pay(
 
 
 @pytest.mark.anyio
+async def test_agent_can_only_create_an_inert_bounded_schedule_draft(
+    client: httpx.AsyncClient,
+    seeded: dict[str, object],
+    session_factory: sessionmaker[Session],
+) -> None:
+    first_run = datetime.now(UTC) + timedelta(days=3)
+    with session_factory() as db, db.begin():
+        autopay = PaymentInstrument(
+            user_id=seeded["customer_id"],
+            provider="razorpay_test",
+            instrument_type="com.razorpay.upi.autopay",
+            alias="Razorpay UPI Autopay",
+            status="active",
+            is_default=False,
+            instrument_metadata={"mode": "test", "token_status": "not_started"},
+        )
+        db.add(autopay)
+        db.flush()
+        autopay_id = autopay.id
+
+    def draft(toolbox: AgentToolbox) -> None:
+        toolbox.draft_scheduled_purchase(
+            items=[
+                {
+                    "acceptable_variant_ids": [str(seeded["drink_variant_id"])],
+                    "quantity": 1,
+                    "modifier_option_ids": [str(seeded["unsweetened_id"])],
+                }
+            ],
+            fulfillment_type="local_delivery",
+            payment_instrument_id=str(autopay_id),
+            address_id=str(seeded["customer_address_id"]),
+            first_run_at=first_run.isoformat(),
+            expires_at=(first_run + timedelta(days=30)).isoformat(),
+            frequency="weekly",
+            interval_count=1,
+            max_occurrences=3,
+            max_amount_minor=30_000,
+            max_total_minor=90_000,
+        )
+
+    runtime = FakeRuntime(draft)
+    conversation = await _conversation(client, seeded, runtime)
+    response = await client.post(
+        f"/api/v1/agent/conversations/{conversation['id']}/messages",
+        headers={**_headers(seeded), "Idempotency-Key": "agent-schedule-draft-1"},
+        json={
+            "content": (
+                "Schedule this unsweetened drink weekly, three times, under ₹300 each and "
+                "₹900 total, starting in three days at my default address."
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    artifact = response.json()["message"]["structured_content"]["scheduled_purchase"]
+    assert artifact["status"] == "draft"
+    assert artifact["authorization_required"] is True
+    assert artifact["payment_started"] is False
+    with session_factory() as db:
+        schedule = db.scalar(select(ScheduledPurchaseIntent))
+        assert schedule is not None and schedule.status.value == "draft"
+        assert db.scalar(select(func.count()).select_from(Checkout)) == 0
+        assert db.scalar(select(func.count()).select_from(Order)) == 0
+
+
+@pytest.mark.anyio
 async def test_invalid_agent_destination_fails_without_checkout(
     client: httpx.AsyncClient,
     seeded: dict[str, object],
@@ -339,6 +409,8 @@ def test_langgraph_runtime_registers_only_bounded_commerce_tools() -> None:
         "remove_cart_item",
         "list_fulfillment_destinations",
         "prepare_checkout",
+        "list_scheduling_options",
+        "draft_scheduled_purchase",
     }
     assert "approve_checkout" not in names
     assert "create_payment" not in names

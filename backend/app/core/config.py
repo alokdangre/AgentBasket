@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     razorpay_webhook_secret: str | None = None
     razorpay_api_url: str = "https://api.razorpay.com/v1"
     razorpay_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
+    razorpay_recurring_enabled: bool = False
+    razorpay_recurring_notification_lead_hours: int = Field(default=25, ge=24, le=168)
+    razorpay_recurring_unattended_limit_minor: int = Field(
+        default=1_500_000,
+        ge=100,
+        le=10_000_000,
+    )
     google_api_key: SecretStr | None = None
     agent_model: str = "gemini-3.5-flash-lite"
     agent_timeout_seconds: float = Field(default=30.0, ge=5.0, le=60.0)
@@ -52,6 +59,9 @@ class Settings(BaseSettings):
     ap2_payment_processor_issuer: str = "urn:agentbasket:payment-processor:razorpay-test"
     ap2_payment_processor_key_id: str = "agentbasket-processor-test-1"
     ap2_payment_processor_private_key_pem: SecretStr | None = None
+    ap2_autonomous_agent_master_key: SecretStr | None = None
+    scheduled_worker_poll_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
+    scheduled_worker_batch_size: int = Field(default=20, ge=1, le=100)
     webauthn_rp_id: str = "localhost"
     webauthn_rp_name: str = "AgentBasket"
     webauthn_expected_origin: str = "http://localhost:3000"

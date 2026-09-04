@@ -115,6 +115,24 @@ class CheckoutService:
                 agent_run_id=agent_run_id,
             )
 
+    def create_scheduled(
+        self,
+        payload: CheckoutCreate,
+        idempotency_key: str,
+        customer: UserAccount,
+        *,
+        expires_at: datetime,
+    ) -> CheckoutOut:
+        """Create an item-based checkout without reading or mutating the cart."""
+        with self.db.begin():
+            return self._create(
+                payload,
+                idempotency_key,
+                customer,
+                source="scheduled_agent",
+                expires_at_override=expires_at,
+            )
+
     def _create(
         self,
         payload: CheckoutCreate,
@@ -124,6 +142,7 @@ class CheckoutService:
         source: str = "storefront",
         agent_conversation_id: uuid.UUID | None = None,
         agent_run_id: uuid.UUID | None = None,
+        expires_at_override: datetime | None = None,
     ) -> CheckoutOut:
         request_hash = self._request_hash(payload, customer.id)
         merchant = self.locations.merchant_by_slug(payload.merchant_slug)
@@ -155,7 +174,14 @@ class CheckoutService:
                 422,
             )
 
-        expires_at = utc_now() + timedelta(minutes=self.settings.checkout_ttl_minutes)
+        expires_at = expires_at_override or (
+            utc_now() + timedelta(minutes=self.settings.checkout_ttl_minutes)
+        )
+        comparable_expiry = (
+            expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=UTC)
+        )
+        if comparable_expiry <= utc_now():
+            raise DomainError("invalid_checkout_expiry", "Checkout expiry must be in the future.")
         checkout = Checkout(
             merchant_id=merchant.id,
             customer_id=customer.id,
@@ -266,8 +292,12 @@ class CheckoutService:
         self.db.add(
             AuditEvent(
                 merchant_id=merchant.id,
-                actor_type="customer",
-                actor_id=str(customer.id),
+                actor_type="agent" if source == "scheduled_agent" else "customer",
+                actor_id=(
+                    f"scheduled:{idempotency_key}"
+                    if source == "scheduled_agent"
+                    else str(customer.id)
+                ),
                 event_type="checkout.quoted",
                 aggregate_type="checkout",
                 aggregate_id=str(checkout.id),

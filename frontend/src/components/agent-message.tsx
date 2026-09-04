@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { AgentCheckoutPayment } from "@/components/agent-checkout-payment";
+import { ScheduledPurchaseArtifact } from "@/components/scheduled-purchase-artifact";
 import type { AgentMessage } from "@/lib/account-types";
 import { formatMoney } from "@/lib/storefront-data";
 import styles from "@/styles/storefront.module.css";
@@ -87,6 +88,10 @@ export function AgentMessageView({
           disabled={disabled}
           onPaid={onPaid}
         />
+      ) : null}
+
+      {structured.scheduled_purchase ? (
+        <ScheduledPurchaseArtifact schedule={structured.scheduled_purchase} />
       ) : null}
 
       {structured.suggestions?.length ? (

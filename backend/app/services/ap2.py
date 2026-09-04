@@ -29,6 +29,7 @@ from app.db.models import (
     Order,
     Payment,
     PaymentCredentialGrant,
+    ScheduledPurchaseRun,
     UserAccount,
 )
 from app.db.models import (
@@ -409,28 +410,52 @@ class AP2Service:
                 Ap2ConsentChallenge.status == "accepted",
             )
         )
-        if challenge is None:
-            return
         existing = list(
             self.db.scalars(select(Ap2Receipt).where(Ap2Receipt.checkout_id == checkout.id))
         )
         if existing:
             return
-        mandates = {
-            item.mandate_type: item
-            for item in self.db.scalars(
-                select(Ap2Mandate).where(Ap2Mandate.challenge_id == challenge.id)
+        challenge_id: str | None = None
+        scheduled_run_id: str | None = None
+        if challenge is not None:
+            mandates = {
+                item.mandate_type: item
+                for item in self.db.scalars(
+                    select(Ap2Mandate).where(Ap2Mandate.challenge_id == challenge.id)
+                )
+            }
+            if set(mandates) != {"checkout", "payment"}:
+                raise ConflictError(
+                    "ap2_evidence_incomplete",
+                    "AP2 receipts cannot be issued without both mandates.",
+                )
+            checkout_reference = digest_b64url(mandates["checkout"].signed_jwt)
+            payment_reference = digest_b64url(mandates["payment"].signed_jwt)
+            challenge_id = str(challenge.id)
+        elif checkout.source == "scheduled_agent":
+            run = self.db.scalar(
+                select(ScheduledPurchaseRun).where(ScheduledPurchaseRun.checkout_id == checkout.id)
             )
-        }
-        if set(mandates) != {"checkout", "payment"} or payment.provider_payment_id is None:
+            if run is None or not (run.closed_checkout_mandate and run.closed_payment_mandate):
+                raise ConflictError(
+                    "ap2_evidence_incomplete",
+                    "Scheduled AP2 receipts require both verified closed mandate chains.",
+                )
+            checkout_reference = digest_b64url(run.closed_checkout_mandate)
+            payment_reference = digest_b64url(run.closed_payment_mandate)
+            scheduled_run_id = str(run.id)
+        else:
+            return
+        if payment.provider_payment_id is None:
             raise ConflictError(
-                "ap2_evidence_incomplete", "AP2 receipts cannot be issued without both mandates."
+                "ap2_evidence_incomplete",
+                "AP2 receipts require a verified provider payment identifier.",
             )
         now = int(utc_now().timestamp())
         checkout_receipt = CheckoutReceiptSuccess(
             iss=self.keys.merchant.issuer,
             iat=now,
-            reference=digest_b64url(mandates["checkout"].signed_jwt),
+            reference=checkout_reference,
             order_id=str(order.id),
         )
         if network_confirmation_id is None and self.settings.app_env == "production":
@@ -441,7 +466,7 @@ class AP2Service:
         payment_receipt = PaymentReceiptSuccess(
             iss=self.keys.payment_processor.issuer,
             iat=now,
-            reference=digest_b64url(mandates["payment"].signed_jwt),
+            reference=payment_reference,
             payment_id=str(payment.id),
             psp_confirmation_id=payment.provider_payment_id,
             network_confirmation_id=network_confirmation_id
@@ -476,7 +501,8 @@ class AP2Service:
                 aggregate_type="checkout",
                 aggregate_id=str(checkout.id),
                 payload={
-                    "challenge_id": str(challenge.id),
+                    "challenge_id": challenge_id,
+                    "scheduled_run_id": scheduled_run_id,
                     "receipt_ids": [str(item.id) for item in records],
                 },
             )

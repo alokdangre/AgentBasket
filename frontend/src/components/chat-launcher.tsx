@@ -202,7 +202,7 @@ export function ChatLauncher() {
         <header className={styles.chatHeading}>
           <div>
             <strong>Ask Ember</strong>
-            <span>Live catalog · approval-gated checkout</span>
+            <span>Live catalog · AP2-gated purchases</span>
           </div>
           <div className={styles.chatHeadingActions}>
             {conversation ? (
@@ -269,7 +269,8 @@ export function ChatLauncher() {
             </button>
           </form>
           <p className={styles.agentBoundary}>
-            Ember may update your cart. Approval and payment always stay with you.
+            Immediate purchases require approval. A schedule may run later only after you approve
+            its exact bounds once.
           </p>
       </section>
       <button

@@ -19,6 +19,9 @@ from app.db.models import (
     Order,
     Payment,
     PaymentCredentialGrant,
+    PaymentInstrument,
+    ScheduledPurchaseIntent,
+    ScheduledPurchaseRun,
     UserAccount,
     WebhookEvent,
 )
@@ -270,48 +273,119 @@ class PaymentService:
             raise DomainError("invalid_webhook_payload", "Webhook payload is invalid.", 400)
         event_type = payload["event"]
         payload_hash = hashlib.sha256(raw_body).hexdigest()
-        with self.db.begin():
-            existing = self.db.scalar(
-                select(WebhookEvent).where(
-                    WebhookEvent.provider == "razorpay", WebhookEvent.event_id == event_id
-                )
-            )
-            if existing is not None:
-                if existing.payload_sha256 != payload_hash:
-                    raise ConflictError(
-                        "webhook_event_collision",
-                        "Webhook event ID was reused with a different payload.",
+        try:
+            with self.db.begin():
+                existing = self.db.scalar(
+                    select(WebhookEvent)
+                    .where(
+                        WebhookEvent.provider == "razorpay",
+                        WebhookEvent.event_id == event_id,
                     )
-                return WebhookResultOut(
-                    status="duplicate", event_id=event_id, event_type=existing.event_type
+                    .with_for_update()
                 )
-            event = WebhookEvent(
-                provider="razorpay",
-                event_id=event_id,
-                event_type=event_type,
-                payload_sha256=payload_hash,
+                if existing is not None:
+                    if existing.payload_sha256 != payload_hash:
+                        raise ConflictError(
+                            "webhook_event_collision",
+                            "Webhook event ID was reused with a different payload.",
+                        )
+                    if existing.processed:
+                        return WebhookResultOut(
+                            status="duplicate",
+                            event_id=event_id,
+                            event_type=existing.event_type,
+                        )
+                    event = existing
+                    event.failure_message = None
+                else:
+                    event = WebhookEvent(
+                        provider="razorpay",
+                        event_id=event_id,
+                        event_type=event_type,
+                        payload_sha256=payload_hash,
+                    )
+                    self.db.add(event)
+                    self.db.flush()
+                status = "ignored"
+                if event_type in {"payment.captured", "order.paid"}:
+                    entity = self._webhook_payment_entity(payload)
+                    payment, order, checkout = self._records_by_provider_order(
+                        str(entity.get("order_id", "")), lock=True
+                    )
+                    provider_payment = self._payment_from_entity(entity)
+                    self._capture(payment, order, checkout, provider_payment, source="webhook")
+                    status = "processed"
+                elif event_type == "payment.failed":
+                    entity = self._webhook_payment_entity(payload)
+                    payment, order, checkout = self._records_by_provider_order(
+                        str(entity.get("order_id", "")), lock=True
+                    )
+                    self._record_failure(payment, order, checkout, entity)
+                    status = "processed"
+                elif event_type in {
+                    "token.confirmed",
+                    "token.paused",
+                    "token.cancelled",
+                    "token.rejected",
+                }:
+                    status = (
+                        "processed"
+                        if self._record_recurring_token_event(event_type, payload)
+                        else "ignored"
+                    )
+                event.processed = True
+                event.processed_at = utc_now()
+                event.failure_message = None
+                return WebhookResultOut(status=status, event_id=event_id, event_type=event_type)
+        except DomainError as error:
+            self.db.rollback()
+            self._record_webhook_processing_failure(
+                event_id,
+                event_type,
+                payload_hash,
+                f"{error.code}: {error.message}",
             )
-            self.db.add(event)
-            self.db.flush()
-            status = "ignored"
-            if event_type in {"payment.captured", "order.paid"}:
-                entity = self._webhook_payment_entity(payload)
-                payment, order, checkout = self._records_by_provider_order(
-                    str(entity.get("order_id", "")), lock=True
+            raise
+        except Exception:
+            self.db.rollback()
+            self._record_webhook_processing_failure(
+                event_id,
+                event_type,
+                payload_hash,
+                "internal_error: Webhook processing failed before reconciliation.",
+            )
+            raise
+
+    def _record_webhook_processing_failure(
+        self,
+        event_id: str,
+        event_type: str,
+        payload_hash: str,
+        failure_message: str,
+    ) -> None:
+        """Keep signed webhook evidence even when commerce reconciliation fails."""
+        with self.db.begin():
+            event = self.db.scalar(
+                select(WebhookEvent)
+                .where(
+                    WebhookEvent.provider == "razorpay",
+                    WebhookEvent.event_id == event_id,
                 )
-                provider_payment = self._payment_from_entity(entity)
-                self._capture(payment, order, checkout, provider_payment, source="webhook")
-                status = "processed"
-            elif event_type == "payment.failed":
-                entity = self._webhook_payment_entity(payload)
-                payment, order, checkout = self._records_by_provider_order(
-                    str(entity.get("order_id", "")), lock=True
+                .with_for_update()
+            )
+            if event is not None and event.payload_sha256 != payload_hash:
+                return
+            if event is None:
+                event = WebhookEvent(
+                    provider="razorpay",
+                    event_id=event_id,
+                    event_type=event_type,
+                    payload_sha256=payload_hash,
                 )
-                self._record_failure(payment, order, checkout, entity)
-                status = "processed"
-            event.processed = True
-            event.processed_at = utc_now()
-            return WebhookResultOut(status=status, event_id=event_id, event_type=event_type)
+                self.db.add(event)
+            event.processed = False
+            event.processed_at = None
+            event.failure_message = failure_message[:2000]
 
     def receipt(self, order_id: uuid.UUID, customer: UserAccount) -> OrderReceiptOut:
         order = self.db.scalar(
@@ -408,6 +482,22 @@ class PaymentService:
                 "payment_state_mismatch",
                 "Captured payment does not match the approved order.",
             )
+        if checkout.source == "scheduled_agent" and (
+            payment.status == PaymentStatus.FAILED
+            or checkout.status == CheckoutStatus.CANCELED
+            or order.status == OrderStatus.CANCELED
+        ):
+            raise ConflictError(
+                "scheduled_payment_terminal",
+                "This scheduled payment attempt already failed and requires reconciliation.",
+            )
+        if checkout.source == "scheduled_agent":
+            self._require_scheduled_capture_binding(
+                payment,
+                order,
+                checkout,
+                provider_payment,
+            )
         if payment.status == PaymentStatus.CAPTURED:
             return
         payment.provider_payment_id = provider_payment.id
@@ -425,13 +515,24 @@ class PaymentService:
             grant.consumed_at = utc_now()
             grant.payment_id = payment.id
         self._consume_reservations(checkout)
-        self._subtract_checkout_from_cart(checkout)
+        if checkout.source in {"storefront", "agent"}:
+            self._subtract_checkout_from_cart(checkout)
         AP2Service(self.db).record_success_receipts(
             checkout,
             order,
             payment,
             provider_payment.network_confirmation_id,
         )
+        if checkout.source == "scheduled_agent":
+            # Keep the scheduled run, budget counters, and next occurrence in the
+            # same transaction as the verified provider capture.
+            from app.services.scheduled_purchase import ScheduledPurchaseService
+
+            ScheduledPurchaseService(self.db).complete_payment(
+                checkout,
+                payment,
+                provider_payment_id=provider_payment.id,
+            )
         self.db.add_all(
             [
                 AuditEvent(
@@ -492,6 +593,16 @@ class PaymentService:
         payment.failure_description = str(
             entity.get("error_description") or "Razorpay reported a failed payment attempt."
         )
+        released_reservations = 0
+        if checkout.source == "scheduled_agent":
+            from app.services.scheduled_purchase import ScheduledPurchaseService
+
+            ScheduledPurchaseService(self.db).fail_payment(checkout, payment)
+            released_reservations = self._release_reservations(checkout, ReservationStatus.RELEASED)
+            if checkout.status != CheckoutStatus.COMPLETED:
+                checkout.status = CheckoutStatus.CANCELED
+            if order.status == OrderStatus.AWAITING_PAYMENT:
+                order.status = OrderStatus.CANCELED
         self.db.add(
             AuditEvent(
                 merchant_id=checkout.merchant_id,
@@ -504,9 +615,218 @@ class PaymentService:
                     "provider_payment_id": payment.provider_payment_id,
                     "error_code": payment.failure_code,
                     "order_id": str(order.id),
+                    "checkout_id": str(checkout.id),
+                    "checkout_status": checkout.status.value,
+                    "order_status": order.status.value,
+                    "released_reservations": released_reservations,
                 },
             )
         )
+
+    def _require_scheduled_capture_binding(
+        self,
+        payment: Payment,
+        order: Order,
+        checkout: Checkout,
+        provider_payment: RazorpayPayment,
+    ) -> None:
+        """Bind a recurring capture to the exact submitted schedule and token."""
+        run = self.db.scalar(
+            select(ScheduledPurchaseRun)
+            .where(
+                ScheduledPurchaseRun.checkout_id == checkout.id,
+                ScheduledPurchaseRun.order_id == order.id,
+                ScheduledPurchaseRun.payment_id == payment.id,
+            )
+            .with_for_update()
+        )
+        if run is None:
+            raise ConflictError(
+                "scheduled_payment_context_missing",
+                "The captured payment has no matching scheduled execution.",
+            )
+        intent = self.db.scalar(
+            select(ScheduledPurchaseIntent)
+            .where(ScheduledPurchaseIntent.id == run.intent_id)
+            .with_for_update()
+        )
+        instrument = (
+            self.db.scalar(
+                select(PaymentInstrument)
+                .where(PaymentInstrument.id == intent.payment_instrument_id)
+                .with_for_update()
+            )
+            if intent is not None and intent.payment_instrument_id is not None
+            else None
+        )
+        if intent is None or instrument is None:
+            raise ConflictError(
+                "scheduled_payment_context_missing",
+                "The captured payment has no complete scheduled authorization context.",
+            )
+        evidence = run.evidence if isinstance(run.evidence, dict) else {}
+        if not evidence.get("debit_submission_started_at"):
+            raise ConflictError(
+                "scheduled_debit_submission_missing",
+                "No durable recurring debit submission exists for this capture.",
+            )
+        if (
+            run.provider_order_id != provider_payment.order_id
+            or payment.provider_order_id != run.provider_order_id
+        ):
+            raise ConflictError(
+                "scheduled_payment_binding_mismatch",
+                "The captured payment does not match the submitted scheduled order.",
+            )
+        if (
+            run.provider_payment_id is not None and run.provider_payment_id != provider_payment.id
+        ) or (
+            payment.provider_payment_id is not None
+            and payment.provider_payment_id != provider_payment.id
+        ):
+            raise ConflictError(
+                "scheduled_payment_binding_mismatch",
+                "The captured payment identifier does not match the submitted debit.",
+            )
+        recurring_token = instrument.provider_token_reference
+        if (
+            instrument.instrument_type != "com.razorpay.upi.autopay"
+            or not provider_payment.token_id
+            or not intent.payment_token_reference
+            or not recurring_token
+            or provider_payment.token_id != intent.payment_token_reference
+            or provider_payment.token_id != recurring_token
+        ):
+            raise ConflictError(
+                "scheduled_payment_token_mismatch",
+                "The captured payment does not match the authorized recurring token.",
+            )
+        # A capture webhook can arrive before the recurring-payment REST response.
+        # Binding the still-empty run here makes that race deterministic and prevents
+        # a later payment identifier from being accepted for the same occurrence.
+        if run.provider_payment_id is None:
+            run.provider_payment_id = provider_payment.id
+
+    def _record_recurring_token_event(self, event_type: str, payload: dict) -> bool:
+        entity = self._webhook_token_entity(payload)
+        token_id = str(entity.get("id") or "")
+        provider_customer_id = str(entity.get("customer_id") or "")
+        if not token_id or not provider_customer_id:
+            raise DomainError(
+                "invalid_webhook_payload",
+                "Webhook recurring token identifiers are missing.",
+                400,
+            )
+        instrument = self.db.scalar(
+            select(PaymentInstrument)
+            .where(
+                PaymentInstrument.instrument_type == "com.razorpay.upi.autopay",
+                PaymentInstrument.provider_token_reference == token_id,
+            )
+            .with_for_update()
+        )
+        if instrument is None:
+            candidates = list(
+                self.db.scalars(
+                    select(PaymentInstrument)
+                    .where(
+                        PaymentInstrument.instrument_type == "com.razorpay.upi.autopay",
+                        PaymentInstrument.provider_customer_id == provider_customer_id,
+                    )
+                    .with_for_update()
+                )
+            )
+            if len(candidates) != 1:
+                raise NotFoundError(
+                    "webhook_token_instrument_not_found",
+                    "Webhook recurring payment method was not found.",
+                )
+            instrument = candidates[0]
+        if instrument.provider_customer_id != provider_customer_id:
+            raise ConflictError(
+                "webhook_token_customer_mismatch",
+                "Webhook token does not match the stored provider customer.",
+            )
+        if (
+            instrument.provider_token_reference is not None
+            and instrument.provider_token_reference != token_id
+        ):
+            raise ConflictError(
+                "webhook_token_replacement_rejected",
+                "Webhook token does not match the registered mandate.",
+            )
+        provider_status = event_type.partition(".")[2]
+        entity_status = str(entity.get("status") or "").lower()
+        if entity_status and entity_status != provider_status:
+            raise DomainError(
+                "invalid_webhook_payload",
+                "Webhook token status does not match its event type.",
+                400,
+            )
+        metadata = dict(instrument.instrument_metadata or {})
+        current_status = str(metadata.get("token_status") or "").lower()
+        incoming_event_at = self._provider_event_at(payload)
+        current_event_at = self._stored_provider_event_at(metadata)
+
+        # Razorpay may redeliver events out of order. Provider occurrence time is
+        # authoritative when both events have it; otherwise prefer the safer,
+        # more restrictive state and never silently reopen a stopped mandate.
+        if (
+            incoming_event_at is not None
+            and current_event_at is not None
+            and incoming_event_at < current_event_at
+        ):
+            return False
+        if current_status == provider_status:
+            return False
+        if current_status in {"cancelled", "rejected"}:
+            return False
+        if current_status == "paused" and provider_status == "confirmed":
+            return False
+
+        metadata.update(
+            {
+                "token_status": provider_status,
+                "registration_status": provider_status,
+                "token_event_at": utc_now().isoformat(),
+                "token_id_sha256": hashlib.sha256(token_id.encode()).hexdigest(),
+            }
+        )
+        if incoming_event_at is not None:
+            metadata["token_event_provider_at"] = incoming_event_at.isoformat()
+        instrument.instrument_metadata = metadata
+        instrument.provider_token_reference = token_id
+        from app.services.scheduled_purchase import ScheduledPurchaseService
+
+        schedules = ScheduledPurchaseService(self.db)
+        if provider_status == "confirmed":
+            schedules.activate_confirmed_instrument(instrument)
+        else:
+            schedules.deactivate_recurring_instrument(instrument, provider_status)
+        return True
+
+    @staticmethod
+    def _provider_event_at(payload: dict) -> datetime | None:
+        value = payload.get("created_at")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        try:
+            return datetime.fromtimestamp(value, UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    @staticmethod
+    def _stored_provider_event_at(metadata: dict) -> datetime | None:
+        value = metadata.get("token_event_provider_at")
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
 
     def _consume_reservations(self, checkout: Checkout) -> None:
         for line in checkout.lines:
@@ -690,6 +1010,7 @@ class PaymentService:
                     ),
                     None,
                 ),
+                token_id=(str(entity["token_id"]) if entity.get("token_id") else None),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise DomainError(
@@ -704,6 +1025,13 @@ class PaymentService:
         return entity
 
     @staticmethod
+    def _webhook_token_entity(payload: dict) -> dict:
+        entity = payload.get("payload", {}).get("token", {}).get("entity")
+        if not isinstance(entity, dict):
+            raise DomainError("invalid_webhook_payload", "Webhook token entity is missing.", 400)
+        return entity
+
+    @staticmethod
     def _fulfillment_snapshot(checkout: Checkout) -> dict:
         option = next((item for item in checkout.fulfillment_options if item.selected), None)
         return {
@@ -715,7 +1043,12 @@ class PaymentService:
             "eta_max_minutes": option.eta_max_minutes if option else None,
         }
 
-    def _release_reservations(self, checkout: Checkout) -> None:
+    def _release_reservations(
+        self,
+        checkout: Checkout,
+        terminal_status: ReservationStatus = ReservationStatus.EXPIRED,
+    ) -> int:
+        released = 0
         for line in checkout.lines:
             for reservation in line.reservations:
                 if reservation.status != ReservationStatus.ACTIVE:
@@ -725,7 +1058,9 @@ class PaymentService:
                     inventory.reserved_quantity = max(
                         0, inventory.reserved_quantity - reservation.quantity
                     )
-                reservation.status = ReservationStatus.EXPIRED
+                reservation.status = terminal_status
+                released += 1
+        return released
 
     @staticmethod
     def _provider_receipt(checkout_id: uuid.UUID) -> str:
