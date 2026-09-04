@@ -93,7 +93,15 @@ def seeded(session_factory: sessionmaker[Session]) -> dict[str, object]:
             product_type=ProductType.PACKAGED_COFFEE,
             status=ProductStatus.ACTIVE,
         )
-        db.add_all([drink, beans])
+        filters = Product(
+            merchant_id=merchant.id,
+            slug="v60-filter-papers",
+            name="V60 Filter Papers",
+            description="A pack of paper filters.",
+            product_type=ProductType.ACCESSORY,
+            status=ProductStatus.ACTIVE,
+        )
+        db.add_all([drink, beans, filters])
         db.flush()
         drink_variant = ProductVariant(
             merchant_id=merchant.id,
@@ -112,7 +120,15 @@ def seeded(session_factory: sessionmaker[Session]) -> dict[str, object]:
             weight_grams=500,
             track_inventory=True,
         )
-        db.add_all([drink_variant, bean_variant])
+        filter_variant = ProductVariant(
+            merchant_id=merchant.id,
+            product_id=filters.id,
+            sku="FILTER-V60-100",
+            name="Pack of 100",
+            price_minor=45000,
+            track_inventory=False,
+        )
+        db.add_all([drink_variant, bean_variant, filter_variant])
         db.flush()
 
         sweetness = ModifierGroup(
@@ -233,6 +249,7 @@ def seeded(session_factory: sessionmaker[Session]) -> dict[str, object]:
             "location_id": location.id,
             "drink_variant_id": drink_variant.id,
             "bean_variant_id": bean_variant.id,
+            "accessory_variant_id": filter_variant.id,
             "unsweetened_id": unsweetened.id,
             "oat_id": oat.id,
             "whole_id": whole.id,

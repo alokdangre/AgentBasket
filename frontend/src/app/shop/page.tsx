@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { CommerceJsonLd } from "@/components/commerce-json-ld";
 import { ProductCard } from "@/components/product-card";
 import { ProductPurchasePanel } from "@/components/product-purchase-panel";
 import { SiteFooter } from "@/components/site-footer";
@@ -42,6 +43,7 @@ export default async function Shop({ searchParams }: ShopProps) {
 
   return (
     <div className={styles.siteShell} data-catalog-source={source}>
+      <CommerceJsonLd catalog={catalog} products={products} />
       <SiteHeader postalCode={postalCode} />
       <main className={styles.shopPage}>
         <header className={styles.shopHeading}>

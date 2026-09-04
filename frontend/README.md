@@ -14,7 +14,13 @@ npm run dev
 The storefront reads the FastAPI commerce core from
 `COMMERCE_API_URL=http://127.0.0.1:8000`. When that service is unavailable,
 the home/catalog foundation renders the matching demo seed so visual development
-and builds remain deterministic.
+and builds remain deterministic. Set `NEXT_PUBLIC_SITE_URL` to the public HTTPS storefront origin
+so JSON-LD contains canonical public URLs.
+
+The home and shop pages render Schema.org `Organization`/`CafeOrCoffeeShop`/`OnlineStore`,
+`OfferCatalog`, `Product`, and `Offer` nodes from the same catalog response used by the visible UI.
+The storefront also proxies `/.well-known/ucp` from the FastAPI core so buyer agents starting from
+the merchant domain can discover the public UCP catalog and redirect-checkout endpoints.
 
 ## Customer and merchant routes
 
@@ -22,7 +28,8 @@ and builds remain deterministic.
 - `/account`: profile and saved delivery addresses;
 - `/cart`: authoritative server cart and quantity controls;
 - `/checkout/review`: exact cart, approval and Razorpay payment flow;
-- `/merchant`: role-gated order and inventory operations;
+- `/checkout/handoff/[sessionId]`: trusted continuation for a UCP-selected cart;
+- `/merchant`: role-gated order, inventory, protocol and payment-readiness operations;
 - `/orders/[orderId]`: verified receipt and money-action audit trail; and
 - `/account/orders`: customer order history.
 
@@ -46,6 +53,10 @@ Step 4 changes `/checkout/review` into a gated flow: calculate the exact server 
 the customer's exact-amount approval, open Razorpay Standard Checkout, then verify capture on
 the backend before showing the receipt. A dismissed or failed provider attempt leaves
 fulfillment blocked and can be retried against the same approved order.
+
+When `/checkout/review` carries a verified `ucp_handoff`, it uses the stronger in-app AP2 payment
+component instead of the basic storefront approval. The UCP agent can choose catalog variants but
+cannot approve the quote, use the passkey, open Razorpay, or assert capture.
 
 Authentication uses a same-site, HTTP-only cookie owned by the Next.js server. The browser
 never receives the commerce-core bearer token. The Next.js BFF only proxies an explicit

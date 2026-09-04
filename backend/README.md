@@ -20,9 +20,22 @@ Step 6 adds a human-present AP2 v0.2 gate to agent-prepared checkouts. It persis
 challenges, ES256 Checkout and Payment Mandates, trusted issuers and signed success receipts, then
 opens Razorpay Standard Checkout inside the conversation only after both mandates verify.
 
+Step 7 adds a public UCP `2026-08-25` catalog projection. Buyer agents discover the REST service at
+`/.well-known/ucp`, then call `/ucp/catalog/search`, `/ucp/catalog/lookup`, or
+`/ucp/catalog/product` with standard `Request-Id` and `UCP-Agent` headers. These read-only routes
+reuse the authoritative catalog and stable product/variant IDs; they do not invoke the LLM or
+create checkout/payment state.
+
 Step 8 adds human-not-present scheduled purchases. Ember can create only an inert bounded draft;
 the Trusted Surface separately passkey-authorizes open AP2 mandates, Razorpay confirms a UPI
 Autopay token, and a durable worker closes and verifies the mandate chains for each exact run.
+
+The UCP checkout extension adds persistent server-side handoffs at `/ucp/checkout-sessions`.
+External agents may create, recover, replace, or cancel a variant selection, but cannot submit a
+Razorpay credential or complete payment. Every session returns `requires_escalation` and an opaque
+`continue_url`; the signed-in buyer imports eligible items, makes any required drink choices,
+selects fulfillment, reviews an authoritative quote, signs AP2 evidence with a passkey, and only
+then opens Razorpay.
 
 ## Local setup
 
@@ -51,14 +64,27 @@ The versioned API includes:
 - AP2 challenge, approval and evidence under `/api/v1/checkouts/{checkout_id}/ap2`;
 - customer scheduled-purchase authorization and controls under `/api/v1/scheduled-purchases`; and
 - Razorpay UPI Autopay registration under
-  `/api/v1/credential-provider/razorpay-upi-autopay/{scheduled_purchase_id}`.
+  `/api/v1/credential-provider/razorpay-upi-autopay/{scheduled_purchase_id}`; and
+- public UCP discovery and catalog reads under `/.well-known/ucp` and `/ucp/catalog/*`; and
+- UCP redirect checkout lifecycle under `/ucp/checkout-sessions`, with authenticated handoff
+  claim and exact-checkout preparation under `/api/v1/ucp/checkout-handoffs`.
 
 Set the development-only `MERCHANT_ADMIN_*` values before running the seed command to create
 the first merchant administrator. Do not reuse those example credentials outside local setup.
 Optional `DEMO_CUSTOMER_*` values create a non-production shopper with serviceable home/office
-addresses and one deliberately unsupported postcode. The incremental seed supplies an imageless,
-recommendation-ready catalog and inventory edge cases, but never fakes carts, checkouts, payments,
-orders, AP2 evidence or audit events.
+addresses and one deliberately unsupported postcode. The incremental seed supplies 17 imageless
+catalog examples—including nine active prepared beverages, plus one deliberately excluded draft—
+and inventory edge cases, but never fakes carts, checkouts, payments, orders, AP2 evidence or audit
+events.
+
+Set `UCP_PUBLIC_BASE_URL` to the public HTTPS backend origin advertised to buyer agents and
+`STOREFRONT_PUBLIC_BASE_URL` to the public HTTPS storefront origin used for canonical product
+links. The localhost defaults are only for local development. Catalog calls require a unique
+`Request-Id` and a structured `UCP-Agent` header such as
+`profile="https://buyer.example/.well-known/ucp"`. UCP checkout advertises no programmatic
+payment handler: it preserves the selected variants and hands the buyer to AgentBasket's existing
+AP2/Razorpay path. Configurable drinks remain buyer-controlled and are never silently assigned
+milk, sweetness, temperature, or add-ons.
 
 For Razorpay, configure test-mode `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and a separate
 `RAZORPAY_WEBHOOK_SECRET`. Subscribe the test webhook to `payment.captured`, `payment.failed`,
@@ -109,3 +135,33 @@ connected separately to a permissioned merchant-operations agent.
 
 Tests use an isolated SQLite database. PostgreSQL remains the production database and Alembic
 is the schema authority.
+
+## UCP checkout smoke test
+
+Start PostgreSQL, migrate/seed, and run FastAPI as shown above. In another terminal:
+
+```bash
+cd backend
+.venv/bin/python scripts/smoke_ucp_checkout.py
+```
+
+The command verifies discovery, catalog selection, persistent checkout recovery, and that an
+agent-side completion attempt is refused in favor of trusted buyer handoff. It prints an `OPEN`
+URL. Open it in the browser, sign in as the seeded customer, continue to the cart, select an
+address, and confirm that the payment panel requires AP2/passkey authorization before Razorpay.
+
+To test the authenticated import and exact quote without a browser, first log in through
+`POST /api/v1/auth/login`, copy its `access_token`, obtain an address ID from
+`GET /api/v1/me/addresses`, then run:
+
+```bash
+.venv/bin/python scripts/smoke_ucp_checkout.py \
+  --customer-token YOUR_ACCESS_TOKEN \
+  --address-id YOUR_ADDRESS_UUID
+```
+
+Use only Razorpay Test Mode keys. A complete payment test additionally requires four AP2 keys, a
+registered local passkey, automatic capture, and a public backend webhook URL ending in
+`/api/v1/webhooks/razorpay`. The merchant console at `/merchant#commerce` shows which of these
+protocol and payment gates are actually configured; it deliberately labels crawlable JSON-LD as
+ACP metadata only, not as ACP feed enrollment.

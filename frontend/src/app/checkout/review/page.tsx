@@ -11,15 +11,24 @@ import storefrontStyles from "@/styles/storefront.module.css";
 export const metadata: Metadata = { title: "Review checkout" };
 
 type CheckoutReviewPageProps = {
-  searchParams: Promise<{ checkout_id?: string }>;
+  searchParams: Promise<{ checkout_id?: string; ucp_handoff?: string }>;
 };
 
 export default async function CheckoutReviewPage({ searchParams }: CheckoutReviewPageProps) {
+  const { checkout_id: checkoutId, ucp_handoff: ucpHandoffId } = await searchParams;
   const user = await getSessionUser();
-  if (!user) redirect("/account/sign-in?next=/checkout/review");
-  const { checkout_id: checkoutId } = await searchParams;
+  if (!user) {
+    const next = ucpHandoffId
+      ? `/checkout/review?ucp_handoff=${encodeURIComponent(ucpHandoffId)}`
+      : "/checkout/review";
+    redirect(`/account/sign-in?next=${encodeURIComponent(next)}`);
+  }
   const validCheckoutId =
     checkoutId && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(checkoutId) ? checkoutId : null;
+  const validUcpHandoffId =
+    ucpHandoffId && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(ucpHandoffId)
+      ? ucpHandoffId
+      : null;
   const [cart, addressPayload, preparedCheckout] = await Promise.all([
     authorizedFetch<Cart>("cart"),
     authorizedFetch<{ addresses: Address[] }>("me/addresses"),
@@ -43,6 +52,7 @@ export default async function CheckoutReviewPage({ searchParams }: CheckoutRevie
           cart={cart}
           addresses={addressPayload?.addresses ?? []}
           initialCheckout={preparedCheckout}
+          ucpHandoffId={validUcpHandoffId}
         />
       </main>
     </div>

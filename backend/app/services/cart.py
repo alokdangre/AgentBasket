@@ -39,9 +39,27 @@ class CartService:
     def add_item(
         self, user: UserAccount, merchant_slug: str, payload: CartItemCreateRequest
     ) -> CartResponse:
+        return self.add_items(user, merchant_slug, [payload])
+
+    def add_items(
+        self,
+        user: UserAccount,
+        merchant_slug: str,
+        payloads: list[CartItemCreateRequest],
+    ) -> CartResponse:
         with self.db.begin():
-            merchant = self._merchant(merchant_slug)
-            cart = self._cart(user.id, merchant, create=True)
+            return self.add_items_in_transaction(user, merchant_slug, payloads)
+
+    def add_items_in_transaction(
+        self,
+        user: UserAccount,
+        merchant_slug: str,
+        payloads: list[CartItemCreateRequest],
+    ) -> CartResponse:
+        """Atomically add several exact configurations inside the caller's transaction."""
+        merchant = self._merchant(merchant_slug)
+        cart = self._cart(user.id, merchant, create=True)
+        for payload in payloads:
             variant = self._variant(merchant.id, payload.variant_id)
             modifiers = self._validate_modifiers(variant.product, payload.modifier_option_ids)
             signature = self._modifier_signature(payload.modifier_option_ids)
@@ -67,9 +85,9 @@ class CartService:
                 )
             else:
                 item.quantity = requested_quantity
-            cart.status = CartStatus.ACTIVE
-            self.db.flush()
-            return self._to_response(cart, merchant)
+        cart.status = CartStatus.ACTIVE
+        self.db.flush()
+        return self._to_response(cart, merchant)
 
     def update_item(
         self,

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 
+import { AgentCheckoutPayment } from "@/components/agent-checkout-payment";
 import {
   apiErrorMessage,
   type Address,
@@ -24,10 +25,12 @@ export function CheckoutPaymentFlow({
   cart,
   addresses,
   initialCheckout = null,
+  ucpHandoffId = null,
 }: {
   cart: Cart;
   addresses: Address[];
   initialCheckout?: Checkout | null;
+  ucpHandoffId?: string | null;
 }) {
   const router = useRouter();
   const checkoutIdempotencyKey = useRef<string | null>(null);
@@ -48,7 +51,10 @@ export function CheckoutPaymentFlow({
     setMessage(null);
     checkoutIdempotencyKey.current ??= crypto.randomUUID();
     try {
-      const response = await fetch("/api/commerce/checkouts/from-cart", {
+      const endpoint = ucpHandoffId
+        ? `/api/commerce/ucp/checkout-handoffs/${ucpHandoffId}/checkout`
+        : "/api/commerce/checkouts/from-cart";
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -66,7 +72,11 @@ export function CheckoutPaymentFlow({
         return;
       }
       setCheckout(result);
-      setMessage("Exact price and inventory are locked for this checkout.");
+      setMessage(
+        ucpHandoffId
+          ? "Exact price and inventory are locked. AP2 review is now required before payment."
+          : "Exact price and inventory are locked for this checkout.",
+      );
     } catch {
       setMessage("The service is unavailable. Try again with the same cart.");
     } finally {
@@ -241,7 +251,13 @@ export function CheckoutPaymentFlow({
           </button>
         ) : null}
 
-        {exactCheckout ? (
+        {exactCheckout && ucpHandoffId ? (
+          <AgentCheckoutPayment
+            checkout={exactCheckout}
+            disabled={pending !== null}
+            onPaid={() => router.refresh()}
+          />
+        ) : exactCheckout ? (
           <section className={styles.paymentGate}>
             <div className={styles.checkoutSectionHeading}>
               <div>
@@ -305,7 +321,7 @@ export function CheckoutPaymentFlow({
               <strong>{formatMoney(exactCheckout.delivery_minor, exactCheckout.currency)}</strong>
             </div>
             <div className={styles.cartTotal}>
-              <span>Approved total</span>
+              <span>{ucpHandoffId ? "Exact total" : "Approved total"}</span>
               <strong>{formatMoney(exactCheckout.total_minor, exactCheckout.currency)}</strong>
             </div>
           </>
@@ -332,7 +348,10 @@ export function CheckoutPaymentFlow({
           captured Razorpay payment. Secrets never enter the browser; the exact total originates
           from the commerce core.
         </p>
-        <Link href="/cart" className={styles.secondaryAction}>
+        <Link
+          href={ucpHandoffId ? `/cart?ucp_handoff=${ucpHandoffId}` : "/cart"}
+          className={styles.secondaryAction}
+        >
           Return to cart
         </Link>
         {message ? (

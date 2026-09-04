@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str = "postgresql+psycopg://agentbasket:agentbasket@localhost:5432/agentbasket"
     sql_echo: bool = False
+    ucp_public_base_url: str = "http://localhost:8000"
+    storefront_public_base_url: str = "http://localhost:3000"
     checkout_ttl_minutes: int = Field(default=10, ge=1, le=60)
     auth_session_ttl_days: int = Field(default=30, ge=1, le=90)
     merchant_admin_email: str | None = None

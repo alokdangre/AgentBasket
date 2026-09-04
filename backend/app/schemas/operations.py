@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -38,10 +39,32 @@ class InventoryRowResponse(BaseModel):
     reorder_point: int
 
 
+class ProtocolCapabilityResponse(BaseModel):
+    name: str
+    version: str | None = None
+    status: Literal["active", "metadata_only", "planned"]
+    endpoint: str
+    detail: str
+
+
+class PaymentRailResponse(BaseModel):
+    name: str
+    status: Literal["configured", "unconfigured", "disabled"]
+    mode: str
+    detail: str
+
+
+class CommerceReadinessResponse(BaseModel):
+    protocols: list[ProtocolCapabilityResponse]
+    payments: list[PaymentRailResponse]
+    warnings: list[str]
+
+
 class OperationsDashboardResponse(BaseModel):
     summary: OperationsSummaryResponse
     recent_orders: list[OperationsOrderResponse]
     inventory_attention: list[InventoryRowResponse]
+    commerce_readiness: CommerceReadinessResponse
 
 
 class InventoryUpdateRequest(BaseModel):

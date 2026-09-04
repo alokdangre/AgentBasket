@@ -42,6 +42,9 @@ export default async function MerchantPage() {
         <a href="#orders">
           <BagIcon /> Orders
         </a>
+        <a href="#commerce">
+          <GridIcon /> Protocols &amp; pay
+        </a>
         <a href="#inventory">
           <BoxIcon /> Inventory
         </a>

@@ -3,6 +3,8 @@ from fastapi.responses import JSONResponse
 
 from app.api.health import router as health_router
 from app.api.router import api_router
+from app.api.ucp import handoff_router as ucp_handoff_router
+from app.api.ucp import router as ucp_router
 from app.core.config import get_settings
 from app.core.errors import DomainError
 
@@ -15,6 +17,8 @@ app = FastAPI(
 )
 app.include_router(health_router)
 app.include_router(api_router)
+app.include_router(ucp_router)
+app.include_router(ucp_handoff_router)
 
 
 @app.exception_handler(DomainError)

@@ -87,10 +87,10 @@ def test_seed_is_incremental_idempotent_imageless_and_transaction_free(
             "locations": 2,
             "location_hours": 14,
             "service_zones": 3,
-            "products": 13,
-            "product_variants": 23,
-            "modifier_groups": 14,
-            "modifier_options": 41,
+            "products": 17,
+            "product_variants": 30,
+            "modifier_groups": 20,
+            "modifier_options": 58,
             "inventory_items": 24,
             "inventory_batches": 4,
             "user_accounts": 1,
@@ -153,10 +153,10 @@ def test_seed_backfills_an_existing_merchant_without_duplicates(
         assert merchant.name == "Ember & Leaf"
         assert db.scalar(select(func.count()).select_from(Merchant)) == 1
         assert db.scalar(select(func.count()).select_from(Location)) == 2
-        assert db.scalar(select(func.count()).select_from(Product)) == 13
-        assert db.scalar(select(func.count()).select_from(ProductVariant)) == 23
-        assert len(set(db.scalars(select(Product.slug)))) == 13
-        assert len(set(db.scalars(select(ProductVariant.sku)))) == 23
+        assert db.scalar(select(func.count()).select_from(Product)) == 17
+        assert db.scalar(select(func.count()).select_from(ProductVariant)) == 30
+        assert len(set(db.scalars(select(Product.slug)))) == 17
+        assert len(set(db.scalars(select(ProductVariant.sku)))) == 30
 
 
 def test_catalog_uses_fulfillment_location_and_filters_unavailable_data(
@@ -290,7 +290,11 @@ def test_seeded_catalog_supports_deterministic_recommendation_dimensions(
         cases = [
             ("decaf cocoa evening", 80000, "monsoon-decaf-coffee"),
             ("caffeine free floral evening", 60000, "chamomile-citrus-tisane"),
-            ("vegan iced refreshing citrus", 30000, "espresso-tonic"),
+            ("vegan iced refreshing citrus", 30000, "hibiscus-citrus-iced-tea"),
+            ("espresso tonic bright", 30000, "espresso-tonic"),
+            ("bold roasty filter", 25000, "bengaluru-filter-coffee"),
+            ("tangy lime sparkling", 30000, "sparkling-kokum-cooler"),
+            ("chocolate caramel rich", 35000, "salted-jaggery-hot-chocolate"),
             ("v60 pour over accessory", 100000, "ceramic-v60-dripper"),
         ]
         for preferences, budget_minor, expected_slug in cases:
@@ -314,5 +318,5 @@ def test_production_seed_never_creates_demo_customer(
 
     with session_factory() as db:
         assert db.scalar(select(func.count()).select_from(UserAccount)) == 0
-        assert db.scalar(select(func.count()).select_from(Product)) == 13
+        assert db.scalar(select(func.count()).select_from(Product)) == 17
     get_settings.cache_clear()

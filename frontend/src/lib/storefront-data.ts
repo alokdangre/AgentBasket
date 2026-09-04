@@ -128,6 +128,38 @@ export const demoCatalog: CatalogResponse = {
       35000,
       "Pack of 100",
     ),
+    product(
+      "bengaluru-filter-coffee",
+      "Bengaluru Filter Coffee",
+      "South Indian filter coffee with a deep roast and silky milk.",
+      "prepared_beverage",
+      16000,
+      "Regular",
+    ),
+    product(
+      "hibiscus-citrus-iced-tea",
+      "Hibiscus Citrus Iced Tea",
+      "Tart hibiscus, orange and lemongrass shaken over ice.",
+      "prepared_beverage",
+      21000,
+      "Regular",
+    ),
+    product(
+      "sparkling-kokum-cooler",
+      "Sparkling Kokum Cooler",
+      "Kokum, lime and soda with a lightly salted, tangy finish.",
+      "prepared_beverage",
+      24000,
+      "Regular",
+    ),
+    product(
+      "salted-jaggery-hot-chocolate",
+      "Salted Jaggery Hot Chocolate",
+      "Dark cocoa, jaggery and sea salt in a rich steamed drink.",
+      "prepared_beverage",
+      26000,
+      "Regular",
+    ),
   ],
 };
 
@@ -137,6 +169,10 @@ export const productImages: Record<string, string> = {
   "masala-cloud-chai": "/images/masala-cloud-chai.webp",
   "darjeeling-first-flush": "/images/darjeeling-first-flush.webp",
   "v60-filter-papers": "/images/roastery.webp",
+  "bengaluru-filter-coffee": "/images/masala-cloud-chai.webp",
+  "hibiscus-citrus-iced-tea": "/images/darjeeling-first-flush.webp",
+  "sparkling-kokum-cooler": "/images/house-cold-brew.webp",
+  "salted-jaggery-hot-chocolate": "/images/masala-cloud-chai.webp",
 };
 
 export const productDisplayNames: Record<string, string> = {

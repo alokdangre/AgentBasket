@@ -40,6 +40,15 @@ function isAllowed(method: string, path: string[]): boolean {
   }
   if (
     path.length === 4 &&
+    path[0] === "ucp" &&
+    path[1] === "checkout-handoffs" &&
+    ["claim", "checkout"].includes(path[3]) &&
+    method === "POST"
+  ) {
+    return true;
+  }
+  if (
+    path.length === 4 &&
     path[0] === "checkouts" &&
     path[2] === "ap2" &&
     ["challenge", "approve"].includes(path[3]) &&

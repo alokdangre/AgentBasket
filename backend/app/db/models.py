@@ -507,6 +507,41 @@ class Checkout(TimestampMixin, Base):
     )
 
 
+class UcpCheckoutSession(TimestampMixin, Base):
+    """Server-side state for a UCP checkout that must continue on the trusted UI."""
+
+    __tablename__ = "ucp_checkout_sessions"
+    __table_args__ = (
+        UniqueConstraint(
+            "merchant_id",
+            "agent_profile_url",
+            "idempotency_key",
+            name="uq_ucp_checkout_agent_idempotency",
+        ),
+        CheckConstraint("subtotal_minor >= 0", name="ck_ucp_checkout_subtotal_nonnegative"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    merchant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("merchants.id", ondelete="CASCADE"), index=True
+    )
+    agent_profile_url: Mapped[str] = mapped_column(String(1000))
+    protocol_version: Mapped[str] = mapped_column(String(32))
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="requires_escalation", index=True)
+    currency: Mapped[str] = mapped_column(String(3))
+    line_items: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
+    subtotal_minor: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    claimed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="SET NULL"), index=True
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claimed_result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class CheckoutLineItem(TimestampMixin, Base):
     __tablename__ = "checkout_line_items"
     __table_args__ = (

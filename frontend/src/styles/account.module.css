@@ -1019,6 +1019,222 @@
   line-height: 1.45;
 }
 
+.handoffPage {
+  padding: clamp(3rem, 7vw, 7rem) var(--page-gutter);
+}
+
+.handoffLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(17rem, 0.65fr);
+  gap: clamp(2rem, 7vw, 7rem);
+  align-items: start;
+}
+
+.handoffMain {
+  min-width: 0;
+}
+
+.handoffEyebrow {
+  color: var(--persimmon);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.handoffMain > h1 {
+  max-width: 12ch;
+  margin: 0.7rem 0 1.2rem;
+  font-family: var(--font-display);
+  font-size: clamp(3rem, 7vw, 6.6rem);
+  font-weight: 500;
+  letter-spacing: -0.045em;
+  line-height: 0.88;
+}
+
+.handoffMain > p {
+  max-width: 42rem;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.handoffLines {
+  margin-top: 3rem;
+  border-top: 1px solid var(--espresso);
+}
+
+.handoffLines article {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+  padding: 1.2rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.handoffLines h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.handoffLines small {
+  display: block;
+  margin-top: 0.25rem;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+
+.handoffConfigure {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 2rem;
+  padding: 1.25rem;
+  border-left: 3px solid var(--persimmon);
+  background: var(--paper);
+}
+
+.handoffConfigure h2,
+.handoffConfigure p {
+  margin: 0;
+}
+
+.handoffConfigure h2 {
+  font-family: var(--font-display);
+}
+
+.handoffConfigure p {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.handoffConfigure a {
+  width: fit-content;
+  color: var(--persimmon);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 0.2rem;
+}
+
+.handoffSummary {
+  position: sticky;
+  top: calc(var(--header-height) + 2rem);
+  display: grid;
+  gap: 1rem;
+  padding: 1.5rem;
+  border-top: 2px solid var(--espresso);
+  background: var(--paper);
+}
+
+.handoffSummary > span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.handoffSummary > strong {
+  font-family: var(--font-display);
+  font-size: clamp(2.2rem, 5vw, 4rem);
+  font-weight: 500;
+}
+
+.handoffSummary > p,
+.handoffSummary > small {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.handoffSummary dl {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding: 1rem 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.handoffSummary dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.handoffSummary dt,
+.handoffSummary dd {
+  margin: 0;
+  font-size: 0.72rem;
+}
+
+.handoffSummary dd {
+  text-align: right;
+}
+
+.handoffSummary button {
+  min-height: 3rem;
+  border: 1px solid var(--espresso);
+  background: var(--espresso);
+  color: var(--cream);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.handoffSummary button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.policyPage {
+  display: grid;
+  max-width: 58rem;
+  gap: 3rem;
+  padding: clamp(3rem, 8vw, 8rem) var(--page-gutter);
+}
+
+.policyPage header {
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--espresso);
+}
+
+.policyPage header span {
+  color: var(--persimmon);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.policyPage h1 {
+  margin: 0.6rem 0 1rem;
+  font-size: clamp(3rem, 8vw, 7rem);
+  line-height: 0.9;
+}
+
+.policyPage h2 {
+  margin: 0 0 0.75rem;
+  font-family: var(--font-display);
+  font-size: 2rem;
+  font-weight: 600;
+}
+
+.policyPage p {
+  max-width: 48rem;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.policyPage section {
+  scroll-margin-top: calc(var(--header-height) + 2rem);
+}
+
 .operationsShell {
   display: grid;
   min-height: 100vh;
@@ -1183,6 +1399,102 @@
   font-size: 0.75rem;
 }
 
+.readinessGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2rem;
+  padding-top: 1.25rem;
+}
+
+.readinessGroup {
+  display: grid;
+  align-content: start;
+  gap: 0;
+}
+
+.readinessGroup h3 {
+  margin: 0;
+  padding-bottom: 0.75rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.readinessRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem 1rem;
+  padding: 1rem 0;
+  border-top: 1px solid var(--rule);
+}
+
+.readinessRow > div {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 0.65rem;
+}
+
+.readinessRow strong {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.readinessRow small,
+.readinessRow p,
+.readinessRow a {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.readinessRow p {
+  grid-column: 1 / -1;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.readinessRow a {
+  width: fit-content;
+  color: var(--persimmon);
+  text-decoration: underline;
+  text-underline-offset: 0.2rem;
+}
+
+.readinessStatus {
+  align-self: start;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid var(--rule);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.readinessStatus[data-status="active"],
+.readinessStatus[data-status="configured"] {
+  border-color: var(--leaf);
+  color: var(--leaf);
+}
+
+.readinessStatus[data-status="metadata_only"],
+.readinessStatus[data-status="unconfigured"] {
+  border-color: var(--persimmon);
+  color: var(--persimmon);
+}
+
+.readinessWarnings {
+  display: grid;
+  gap: 0.45rem;
+  margin: 1rem 0 0;
+  padding: 1rem 1rem 1rem 2rem;
+  border-left: 3px solid var(--persimmon);
+  background: rgba(223, 72, 20, 0.06);
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
 .tableScroll {
   overflow-x: auto;
 }
@@ -1263,11 +1575,13 @@
 
   .cartLayout,
   .reviewLayout,
-  .purchasePanel {
+  .purchasePanel,
+  .handoffLayout {
     grid-template-columns: 1fr;
   }
 
-  .cartSummary {
+  .cartSummary,
+  .handoffSummary {
     position: static;
   }
 
@@ -1300,6 +1614,10 @@
 
   .operationsSummary div:nth-child(-n + 2) {
     border-bottom: 1px solid var(--rule);
+  }
+
+  .readinessGrid {
+    grid-template-columns: 1fr;
   }
 }
 

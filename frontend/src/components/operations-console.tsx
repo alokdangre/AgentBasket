@@ -143,6 +143,54 @@ export function OperationsConsole({
           <dd>{formatMoney(summary.captured_revenue_minor, summary.currency)}</dd>
         </div>
       </dl>
+      <section id="commerce" className={styles.operationsSection}>
+        <div className={styles.operationsSectionHeading}>
+          <h2>Agentic commerce readiness</h2>
+          <span>Live capabilities only; secrets are never shown.</span>
+        </div>
+        <div className={styles.readinessGrid}>
+          <div className={styles.readinessGroup}>
+            <h3>Protocols</h3>
+            {dashboard.commerce_readiness.protocols.map((protocol) => (
+              <article key={protocol.name} className={styles.readinessRow}>
+                <div>
+                  <strong>{protocol.name}</strong>
+                  {protocol.version ? <small>{protocol.version}</small> : null}
+                </div>
+                <span className={styles.readinessStatus} data-status={protocol.status}>
+                  {protocol.status.replaceAll("_", " ")}
+                </span>
+                <p>{protocol.detail}</p>
+                <a href={protocol.endpoint} target="_blank" rel="noreferrer">
+                  Inspect endpoint
+                </a>
+              </article>
+            ))}
+          </div>
+          <div className={styles.readinessGroup}>
+            <h3>Payment rails</h3>
+            {dashboard.commerce_readiness.payments.map((payment) => (
+              <article key={payment.name} className={styles.readinessRow}>
+                <div>
+                  <strong>{payment.name}</strong>
+                  <small>{payment.mode}</small>
+                </div>
+                <span className={styles.readinessStatus} data-status={payment.status}>
+                  {payment.status}
+                </span>
+                <p>{payment.detail}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+        {dashboard.commerce_readiness.warnings.length ? (
+          <ul className={styles.readinessWarnings}>
+            {dashboard.commerce_readiness.warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
       <section id="orders" className={styles.operationsSection}>
         <div className={styles.operationsSectionHeading}>
           <h2>Recent orders</h2>

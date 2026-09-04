@@ -12,7 +12,13 @@ import {
 import { formatMoney, productImages } from "@/lib/storefront-data";
 import styles from "@/styles/account.module.css";
 
-export function CartView({ initialCart }: { initialCart: Cart }) {
+export function CartView({
+  initialCart,
+  checkoutHref = "/checkout/review",
+}: {
+  initialCart: Cart;
+  checkoutHref?: string;
+}) {
   const [cart, setCart] = useState(initialCart);
   const [pendingItem, setPendingItem] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -128,7 +134,7 @@ export function CartView({ initialCart }: { initialCart: Cart }) {
           <span>Total before delivery</span>
           <strong>{formatMoney(cart.subtotal_minor, cart.currency)}</strong>
         </div>
-        <Link href="/checkout/review" className={styles.primaryAction}>
+        <Link href={checkoutHref} className={styles.primaryAction}>
           Review checkout
         </Link>
         <Link href="/shop" className={styles.secondaryAction}>

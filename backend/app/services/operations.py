@@ -3,6 +3,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError
 from app.db.models import (
     AuditEvent,
@@ -18,11 +19,14 @@ from app.db.models import (
 )
 from app.domain.enums import CheckoutStatus, OrderStatus, PaymentStatus
 from app.schemas.operations import (
+    CommerceReadinessResponse,
     InventoryRowResponse,
     InventoryUpdateRequest,
     OperationsDashboardResponse,
     OperationsOrderResponse,
     OperationsSummaryResponse,
+    PaymentRailResponse,
+    ProtocolCapabilityResponse,
 )
 
 ORDER_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
@@ -39,6 +43,7 @@ ORDER_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
 class OperationsService:
     def __init__(self, db: Session) -> None:
         self.db = db
+        self.settings = get_settings()
 
     def dashboard(self, merchant_user: UserAccount) -> OperationsDashboardResponse:
         merchant = self._merchant(merchant_user.merchant_id)
@@ -93,6 +98,7 @@ class OperationsService:
             ),
             recent_orders=self._orders(merchant.id, limit=10),
             inventory_attention=self._inventory(merchant.id, only_low_stock=True, limit=10),
+            commerce_readiness=self._commerce_readiness(),
         )
 
     def orders(self, merchant_user: UserAccount) -> list[OperationsOrderResponse]:
@@ -253,6 +259,118 @@ class OperationsService:
             reserved_quantity=inventory.reserved_quantity,
             available_quantity=inventory.on_hand_quantity - inventory.reserved_quantity,
             reorder_point=inventory.reorder_point,
+        )
+
+    def _commerce_readiness(self) -> CommerceReadinessResponse:
+        ucp_base = self.settings.ucp_public_base_url.rstrip("/")
+        storefront_base = self.settings.storefront_public_base_url.rstrip("/")
+        ap2_values = (
+            self.settings.ap2_merchant_private_key_pem,
+            self.settings.ap2_agent_provider_private_key_pem
+            or self.settings.ap2_trusted_surface_private_key_pem,
+            self.settings.ap2_credentials_provider_private_key_pem,
+            self.settings.ap2_payment_processor_private_key_pem,
+        )
+        ap2_configured = all(value is not None for value in ap2_values)
+        razorpay_configured = bool(
+            self.settings.razorpay_key_id and self.settings.razorpay_key_secret
+        )
+        recurring_configured = bool(
+            self.settings.razorpay_recurring_enabled
+            and self.settings.ap2_autonomous_agent_master_key
+            and ap2_configured
+            and razorpay_configured
+        )
+        warnings: list[str] = []
+        if not ucp_base.startswith("https://") or not storefront_base.startswith("https://"):
+            warnings.append(
+                "Local HTTP is suitable for testing only; production UCP discovery and "
+                "continue URLs must use HTTPS."
+            )
+        if not self.settings.razorpay_webhook_secret:
+            warnings.append(
+                "Razorpay capture reconciliation is incomplete until a separate webhook "
+                "secret is configured."
+            )
+        return CommerceReadinessResponse(
+            protocols=[
+                ProtocolCapabilityResponse(
+                    name="Universal Commerce Protocol",
+                    version="2026-08-25",
+                    status="active",
+                    endpoint=f"{ucp_base}/.well-known/ucp",
+                    detail=(
+                        "Catalog search/lookup and persistent redirect checkout handoff are live."
+                    ),
+                ),
+                ProtocolCapabilityResponse(
+                    name="Schema.org JSON-LD",
+                    status="active",
+                    endpoint=storefront_base,
+                    detail="Merchant, products, variants, offers, prices and availability.",
+                ),
+                ProtocolCapabilityResponse(
+                    name="Agentic Commerce Protocol",
+                    version="2026-04-17",
+                    status="metadata_only",
+                    endpoint=storefront_base,
+                    detail=(
+                        "Crawlable merchant metadata is live; ACP feed enrollment and "
+                        "protocol-native checkout are not claimed."
+                    ),
+                ),
+                ProtocolCapabilityResponse(
+                    name="Agent Payments Protocol",
+                    version="0.2",
+                    status="active" if ap2_configured else "planned",
+                    endpoint=f"{ucp_base}/api/v1/checkouts",
+                    detail=(
+                        "Human-present checkout mandates are configured."
+                        if ap2_configured
+                        else "Add the four independent AP2 signing keys to activate mandates."
+                    ),
+                ),
+            ],
+            payments=[
+                PaymentRailResponse(
+                    name="Razorpay Standard Checkout",
+                    status="configured" if razorpay_configured else "unconfigured",
+                    mode=(
+                        "test"
+                        if (self.settings.razorpay_key_id or "").startswith("rzp_test_")
+                        else "live"
+                        if razorpay_configured
+                        else "none"
+                    ),
+                    detail=(
+                        "Buyer opens Razorpay only after exact checkout approval."
+                        if razorpay_configured
+                        else "Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET."
+                    ),
+                ),
+                PaymentRailResponse(
+                    name="Razorpay webhook reconciliation",
+                    status=(
+                        "configured" if self.settings.razorpay_webhook_secret else "unconfigured"
+                    ),
+                    mode="server-to-server",
+                    detail="Captured, failed, paid and recurring-token events are verified.",
+                ),
+                PaymentRailResponse(
+                    name="Razorpay UPI Autopay",
+                    status="configured" if recurring_configured else "disabled",
+                    mode="scheduled AP2",
+                    detail=(
+                        "Unattended debits are gated by confirmed recurring tokens and AP2 bounds."
+                        if recurring_configured
+                        else (
+                            "Disabled until recurring access, AP2 keys and the agent master "
+                            "key are set."
+                        )
+                    ),
+                ),
+            ],
+            warnings=warnings,
         )
 
     def _merchant(self, merchant_id: uuid.UUID | None) -> Merchant:

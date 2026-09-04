@@ -46,6 +46,10 @@ async def test_operations_are_role_gated_and_report_low_stock(
     assert dashboard.status_code == 200
     assert dashboard.json()["summary"]["low_stock_variants"] == 1
     assert dashboard.json()["inventory_attention"][0]["available_quantity"] == 2
+    readiness = dashboard.json()["commerce_readiness"]
+    assert readiness["protocols"][0]["status"] == "active"
+    assert readiness["protocols"][2]["status"] == "metadata_only"
+    assert readiness["payments"][0]["status"] in {"configured", "unconfigured"}
 
 
 @pytest.mark.anyio

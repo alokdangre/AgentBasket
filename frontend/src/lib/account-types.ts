@@ -365,6 +365,56 @@ export type OperationsDashboard = {
   };
   recent_orders: OperationsOrder[];
   inventory_attention: InventoryRow[];
+  commerce_readiness: {
+    protocols: Array<{
+      name: string;
+      version: string | null;
+      status: "active" | "metadata_only" | "planned";
+      endpoint: string;
+      detail: string;
+    }>;
+    payments: Array<{
+      name: string;
+      status: "configured" | "unconfigured" | "disabled";
+      mode: string;
+      detail: string;
+    }>;
+    warnings: string[];
+  };
+};
+
+export type UcpCheckoutHandoff = {
+  id: string;
+  status: "requires_escalation" | "canceled";
+  currency: string;
+  line_items: Array<{
+    id: string;
+    item: { id: string; title: string; price: number; image_url?: string };
+    quantity: number;
+    totals: Array<{ type: "subtotal" | "total"; amount: number }>;
+  }>;
+  totals: Array<{ type: "subtotal" | "total"; amount: number }>;
+  messages: Array<{
+    type: "error" | "warning" | "info";
+    code: string;
+    content: string;
+    severity?: string;
+    path?: string;
+  }>;
+  expires_at: string;
+};
+
+export type UcpCheckoutClaim = {
+  session_id: string;
+  status: "claimed";
+  imported_item_count: number;
+  configuration_required: Array<{
+    variant_id: string;
+    product_name: string;
+    product_slug: string;
+    shop_url: string;
+  }>;
+  next_url: string;
 };
 
 export type ApiError = {
