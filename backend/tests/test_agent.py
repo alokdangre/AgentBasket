@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.agents.policy import AgentActionPolicy
 from app.agents.runtime import (
     AgentRuntimeResult,
     LangGraphShoppingRuntime,
@@ -16,6 +17,7 @@ from app.agents.runtime import (
 )
 from app.agents.tools import AgentToolbox
 from app.core.errors import DomainError
+from app.domain.enums import FulfillmentType
 from app.db.models import (
     AgentRun,
     AgentToolCall,
@@ -32,17 +34,20 @@ from app.main import app
 class FakeRuntime:
     model_name = "fake-shopping-model"
 
-    def __init__(self, action: Callable[[AgentToolbox], None] | None = None) -> None:
+    def __init__(
+        self,
+        action: Callable[[AgentToolbox], None] | None = None,
+        text: str = "Here is the catalog-grounded result.",
+    ) -> None:
         self.action = action
+        self.text = text
         self.calls = 0
 
     async def run(self, *, toolbox: AgentToolbox, **_: Any) -> AgentRuntimeResult:
         self.calls += 1
         if self.action:
             self.action(toolbox)
-        return AgentRuntimeResult(
-            text="Here is the catalog-grounded result.", model=self.model_name
-        )
+        return AgentRuntimeResult(text=self.text, model=self.model_name)
 
 
 class FailingRuntime(FakeRuntime):
@@ -136,9 +141,11 @@ async def test_recommendation_is_catalog_grounded_audited_and_idempotent(
     seeded: dict[str, object],
     session_factory: sessionmaker[Session],
 ) -> None:
-    runtime = FakeRuntime(
-        lambda toolbox: toolbox.recommend_products("smooth refreshing cold brew", 30000, "560038")
-    )
+    def recommend(toolbox: AgentToolbox) -> None:
+        result = toolbox.recommend_products("smooth refreshing cold brew", 30000, "560038")
+        toolbox.present_products([result["products"][0]["id"]])
+
+    runtime = FakeRuntime(recommend, text="**House Cold Brew** is the strongest refreshing match.")
     conversation = await _conversation(client, seeded, runtime)
     request_headers = {
         **_headers(seeded),
@@ -179,6 +186,344 @@ async def test_recommendation_is_catalog_grounded_audited_and_idempotent(
         audit = db.scalar(select(AuditEvent).where(AuditEvent.event_type == "agent.tool.completed"))
         assert audit is not None
         assert audit.payload["tool_name"] == "recommend_products"
+
+
+def test_structured_products_include_only_names_selected_in_final_answer() -> None:
+    toolbox = AgentToolbox(
+        db=None,  # type: ignore[arg-type]
+        customer=None,  # type: ignore[arg-type]
+        merchant_id=uuid.uuid4(),
+        merchant_slug="ember-and-leaf",
+        conversation_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+    )
+    toolbox.outcomes = [
+        {
+            "tool": "search_catalog",
+            "status": "success",
+            "payload": {
+                "status": "success",
+                "products": [
+                    {"id": "filter", "name": "Bengaluru Filter Coffee"},
+                    {"id": "dripper", "name": "Ceramic V60 Dripper"},
+                    {"id": "cold-brew", "name": "House Cold Brew"},
+                ],
+            },
+        },
+        {
+            "tool": "present_products",
+            "status": "success",
+            "payload": {
+                "status": "success",
+                "products": [
+                    {"id": "cold-brew", "name": "House Cold Brew"},
+                    {"id": "filter", "name": "Bengaluru Filter Coffee"},
+                ],
+            },
+        },
+    ]
+
+    structured = toolbox.structured_content(
+        "Try **House Cold Brew** first, then **Bengaluru Filter Coffee**."
+    )
+
+    assert [product["id"] for product in structured["products"]] == [
+        "cold-brew",
+        "filter",
+    ]
+
+
+def test_structured_products_are_omitted_when_answer_selects_none() -> None:
+    toolbox = AgentToolbox(
+        db=None,  # type: ignore[arg-type]
+        customer=None,  # type: ignore[arg-type]
+        merchant_id=uuid.uuid4(),
+        merchant_slug="ember-and-leaf",
+        conversation_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+    )
+    toolbox.outcomes = [
+        {
+            "tool": "search_catalog",
+            "status": "success",
+            "payload": {
+                "status": "success",
+                "products": [{"id": "dripper", "name": "Ceramic V60 Dripper"}],
+            },
+        }
+    ]
+
+    assert "products" not in toolbox.structured_content("I did not find a matching beverage.")
+
+
+def test_structured_configuration_uses_one_verified_product_for_an_add_request() -> None:
+    message = "Add one Bengaluru Filter Coffee to my cart."
+    toolbox = AgentToolbox(
+        db=None,  # type: ignore[arg-type]
+        customer=None,  # type: ignore[arg-type]
+        merchant_id=uuid.uuid4(),
+        merchant_slug="ember-and-leaf",
+        conversation_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        policy_decision=AgentActionPolicy.classify(message),
+        current_message=message,
+    )
+    toolbox.outcomes = [
+        {
+            "tool": "search_catalog",
+            "status": "success",
+            "payload": {
+                "status": "success",
+                "products": [
+                    {
+                        "id": "filter-coffee",
+                        "slug": "bengaluru-filter-coffee",
+                        "name": "Bengaluru Filter Coffee",
+                        "variants": [
+                            {
+                                "id": "regular",
+                                "name": "Regular",
+                                "size_label": "180 ml",
+                                "price_minor": 16000,
+                                "currency": "INR",
+                            },
+                            {
+                                "id": "large",
+                                "name": "Large",
+                                "size_label": "280 ml",
+                                "price_minor": 21000,
+                                "currency": "INR",
+                            },
+                        ],
+                        "modifier_groups": [
+                            {
+                                "id": "milk",
+                                "name": "Milk",
+                                "required": True,
+                                "minimum_selections": 1,
+                                "maximum_selections": 1,
+                                "options": [
+                                    {
+                                        "id": "dairy",
+                                        "name": "Dairy milk",
+                                        "price_delta_minor": 0,
+                                    },
+                                    {
+                                        "id": "oat",
+                                        "name": "Oat milk",
+                                        "price_delta_minor": 4000,
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                    {
+                        "id": "dripper",
+                        "slug": "ceramic-v60-dripper",
+                        "name": "Ceramic V60 Dripper",
+                        "variants": [{"id": "size-02", "name": "Size 02"}],
+                        "modifier_groups": [],
+                    },
+                ],
+            },
+        }
+    ]
+
+    structured = toolbox.structured_content("Please choose a size and milk option below.")
+
+    configuration = structured["product_configuration"]
+    assert configuration["product_id"] == "filter-coffee"
+    assert configuration["product_name"] == "Bengaluru Filter Coffee"
+    assert configuration["purpose"] == "cart_add"
+    assert [variant["name"] for variant in configuration["variants"]] == [
+        "Regular",
+        "Large",
+    ]
+    assert configuration["modifier_groups"][0]["name"] == "Milk"
+
+
+def test_schedule_draft_emits_schedule_product_configuration() -> None:
+    message = "Schedule one Bengaluru Filter Coffee daily."
+    toolbox = AgentToolbox(
+        db=None,  # type: ignore[arg-type]
+        customer=None,  # type: ignore[arg-type]
+        merchant_id=uuid.uuid4(),
+        merchant_slug="ember-and-leaf",
+        conversation_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        policy_decision=AgentActionPolicy.classify(message),
+        current_message=message,
+    )
+    toolbox.outcomes = [
+        {
+            "tool": "search_catalog",
+            "status": "success",
+            "payload": {
+                "status": "success",
+                "products": [
+                    {
+                        "id": "filter-coffee",
+                        "slug": "bengaluru-filter-coffee",
+                        "name": "Bengaluru Filter Coffee",
+                        "variants": [
+                            {"id": "small", "name": "Small"},
+                            {"id": "large", "name": "Large"},
+                        ],
+                        "modifier_groups": [
+                            {
+                                "id": "milk",
+                                "name": "Milk",
+                                "required": True,
+                                "minimum_selections": 1,
+                                "maximum_selections": 1,
+                                "options": [{"id": "dairy", "name": "Dairy milk"}],
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+    ]
+
+    structured = toolbox.structured_content("Choose the size and milk for the schedule.")
+
+    assert structured["product_configuration"]["purpose"] == "schedule_draft"
+    assert structured["product_configuration"]["product_name"] == ("Bengaluru Filter Coffee")
+
+
+def test_schedule_draft_emits_recurring_and_money_configuration() -> None:
+    message = "Schedule Citrus Bloom Coffee daily."
+    toolbox = AgentToolbox(
+        db=None,  # type: ignore[arg-type]
+        customer=None,  # type: ignore[arg-type]
+        merchant_id=uuid.uuid4(),
+        merchant_slug="ember-and-leaf",
+        conversation_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        policy_decision=AgentActionPolicy.classify(message),
+        current_message=message,
+    )
+    toolbox.outcomes = [
+        {
+            "tool": "list_scheduling_options",
+            "status": "success",
+            "payload": {
+                "status": "success",
+                "scheduling_options": {
+                    "delivery_addresses": [],
+                    "pickup_locations": [],
+                    "payment_instruments": [],
+                    "minimum_notification_lead_hours": 25,
+                    "earliest_first_run_at": "2030-01-02T03:04:05+00:00",
+                    "recurring_provider_enabled": False,
+                    "draft_available": False,
+                    "availability_code": "recurring_provider_disabled",
+                    "availability_message": "Recurring scheduling is disabled.",
+                },
+            },
+        }
+    ]
+
+    structured = toolbox.structured_content("Choose the remaining schedule bounds.")
+
+    assert structured["schedule_draft_pending"] == {"version": "agent-schedule-draft-1"}
+    assert structured["schedule_configuration"] == {
+        "version": "agent-schedule-configuration-1",
+        "currency": "INR",
+        "frequency": "daily",
+        "frequency_options": ["once", "daily", "weekly", "monthly"],
+        "minimum_notification_lead_hours": 25,
+        "earliest_first_run_at": "2030-01-02T03:04:05+00:00",
+        "recurring_provider_enabled": False,
+        "draft_available": False,
+        "availability_code": "recurring_provider_disabled",
+        "availability_message": "Recurring scheduling is disabled.",
+    }
+
+
+def test_structured_configuration_is_not_shown_for_discovery_or_after_a_mutation() -> None:
+    product = {
+        "id": "filter-coffee",
+        "slug": "bengaluru-filter-coffee",
+        "name": "Bengaluru Filter Coffee",
+        "variants": [
+            {"id": "regular", "name": "Regular"},
+            {"id": "large", "name": "Large"},
+        ],
+        "modifier_groups": [],
+    }
+    discovery = AgentToolbox(
+        db=None,  # type: ignore[arg-type]
+        customer=None,  # type: ignore[arg-type]
+        merchant_id=uuid.uuid4(),
+        merchant_slug="ember-and-leaf",
+        conversation_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        policy_decision=AgentActionPolicy.classify("Recommend a filter coffee."),
+    )
+    discovery.outcomes = [
+        {
+            "tool": "search_catalog",
+            "status": "success",
+            "payload": {"status": "success", "products": [product]},
+        }
+    ]
+    assert "product_configuration" not in discovery.structured_content(
+        "Bengaluru Filter Coffee is my recommendation."
+    )
+
+    add_request = "Add one Bengaluru Filter Coffee to my cart."
+    completed = AgentToolbox(
+        db=None,  # type: ignore[arg-type]
+        customer=None,  # type: ignore[arg-type]
+        merchant_id=uuid.uuid4(),
+        merchant_slug="ember-and-leaf",
+        conversation_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        policy_decision=AgentActionPolicy.classify(add_request),
+        current_message=add_request,
+    )
+    completed.outcomes = [
+        {
+            "tool": "search_catalog",
+            "status": "success",
+            "payload": {"status": "success", "products": [product]},
+        },
+        {
+            "tool": "add_to_cart",
+            "status": "success",
+            "payload": {"status": "success", "cart": {"item_count": 1}},
+        },
+    ]
+    assert "product_configuration" not in completed.structured_content(
+        "Bengaluru Filter Coffee was added."
+    )
+
+
+@pytest.mark.anyio
+async def test_agent_returns_catalog_backed_configuration_controls(
+    client: httpx.AsyncClient,
+    seeded: dict[str, object],
+) -> None:
+    runtime = FakeRuntime(
+        lambda toolbox: toolbox.search_catalog("House Cold Brew"),
+        text="House Cold Brew needs a sweetness choice.",
+    )
+    conversation = await _conversation(client, seeded, runtime)
+    response = await client.post(
+        f"/api/v1/agent/conversations/{conversation['id']}/messages",
+        headers={**_headers(seeded), "Idempotency-Key": "agent-product-configuration-1"},
+        json={"content": "Add one House Cold Brew to my cart."},
+    )
+
+    assert response.status_code == 200
+    configuration = response.json()["message"]["structured_content"]["product_configuration"]
+    assert configuration["product_name"] == "House Cold Brew"
+    assert [variant["name"] for variant in configuration["variants"]] == ["Regular"]
+    assert [group["name"] for group in configuration["modifier_groups"]] == [
+        "Sweetness",
+        "Milk",
+    ]
 
 
 @pytest.mark.anyio
@@ -271,6 +616,7 @@ async def test_agent_can_only_create_an_inert_bounded_schedule_draft(
         autopay_id = autopay.id
 
     def draft(toolbox: AgentToolbox) -> None:
+        toolbox.list_scheduling_options()
         toolbox.draft_scheduled_purchase(
             items=[
                 {
@@ -305,15 +651,126 @@ async def test_agent_can_only_create_an_inert_bounded_schedule_draft(
     )
 
     assert response.status_code == 200
-    artifact = response.json()["message"]["structured_content"]["scheduled_purchase"]
+    structured = response.json()["message"]["structured_content"]
+    artifact = structured["scheduled_purchase"]
     assert artifact["status"] == "draft"
     assert artifact["authorization_required"] is True
     assert artifact["payment_started"] is False
+    assert artifact["review_url"] == "/account#scheduled-purchases"
+    assert "clarification" not in structured
+    assert "suggestions" not in structured
+    assert "schedule_configuration" not in structured
+    assert "schedule_draft_pending" not in structured
     with session_factory() as db:
         schedule = db.scalar(select(ScheduledPurchaseIntent))
         assert schedule is not None and schedule.status.value == "draft"
         assert db.scalar(select(func.count()).select_from(Checkout)) == 0
         assert db.scalar(select(func.count()).select_from(Order)) == 0
+
+
+@pytest.mark.anyio
+async def test_agent_can_draft_pickup_schedule_with_extraneous_address_id(
+    client: httpx.AsyncClient,
+    seeded: dict[str, object],
+    session_factory: sessionmaker[Session],
+) -> None:
+    first_run = datetime.now(UTC) + timedelta(days=2)
+    with session_factory() as db, db.begin():
+        autopay = PaymentInstrument(
+            user_id=seeded["customer_id"],
+            provider="razorpay_test",
+            instrument_type="com.razorpay.upi.autopay",
+            alias="Razorpay UPI Autopay",
+            status="active",
+            is_default=False,
+            instrument_metadata={"mode": "test", "account_reference": "user@okhdfcbank"},
+        )
+        db.add(autopay)
+        db.flush()
+        autopay_id = autopay.id
+
+    def draft(toolbox: AgentToolbox) -> None:
+        toolbox.list_scheduling_options()
+        toolbox.draft_scheduled_purchase(
+            items=[
+                {
+                    "acceptable_variant_ids": [str(seeded["drink_variant_id"])],
+                    "quantity": 1,
+                    "modifier_option_ids": [str(seeded["unsweetened_id"])],
+                }
+            ],
+            fulfillment_type="pickup",
+            payment_instrument_id=str(autopay_id),
+            location_id=str(seeded["location_id"]),
+            address_id=str(seeded["customer_address_id"]),
+            first_run_at=first_run.isoformat(),
+            expires_at=(first_run + timedelta(days=30)).isoformat(),
+            frequency="daily",
+            interval_count=1,
+            max_occurrences=3,
+            max_amount_minor=30_000,
+            max_total_minor=90_000,
+        )
+
+    runtime = FakeRuntime(draft)
+    conversation = await _conversation(client, seeded, runtime)
+    response = await client.post(
+        f"/api/v1/agent/conversations/{conversation['id']}/messages",
+        headers={**_headers(seeded), "Idempotency-Key": "agent-schedule-pickup-1"},
+        json={
+            "content": (
+                "Schedule this unsweetened drink daily for 3 days for pickup at Indiranagar Café."
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    structured = response.json()["message"]["structured_content"]
+    artifact = structured["scheduled_purchase"]
+    assert artifact["status"] == "draft"
+    assert artifact["fulfillment_type"] == "pickup"
+    assert artifact["location_id"] == str(seeded["location_id"])
+    assert artifact["address_id"] is None
+    assert "clarification" not in structured
+    assert "suggestions" not in structured
+    assert "schedule_configuration" not in structured
+    assert "product_configuration" not in structured
+    with session_factory() as db:
+        schedule = db.scalar(
+            select(ScheduledPurchaseIntent).where(
+                ScheduledPurchaseIntent.fulfillment_type == FulfillmentType.PICKUP
+            )
+        )
+        assert schedule is not None
+        assert schedule.location_id == seeded["location_id"]
+        assert schedule.address_id is None
+
+
+@pytest.mark.anyio
+async def test_failed_mutating_tool_does_not_consume_mutation_budget(
+    client: httpx.AsyncClient,
+    seeded: dict[str, object],
+) -> None:
+    def fail_then_succeed(toolbox: AgentToolbox) -> None:
+        toolbox.add_to_cart(str(uuid.uuid4()), 1, [])
+        toolbox.add_to_cart(
+            str(seeded["drink_variant_id"]),
+            1,
+            [str(seeded["unsweetened_id"])],
+        )
+
+    runtime = FakeRuntime(fail_then_succeed)
+    conversation = await _conversation(client, seeded, runtime)
+    response = await client.post(
+        f"/api/v1/agent/conversations/{conversation['id']}/messages",
+        headers={**_headers(seeded), "Idempotency-Key": "agent-mutation-recovery-1"},
+        json={"content": "Add one regular cold brew, unsweetened to my cart."},
+    )
+    assert response.status_code == 200
+    activity = response.json()["message"]["structured_content"]["activity"]
+    assert [item["status"] for item in activity] == ["error", "success"]
+    cart = await client.get("/api/v1/cart", headers=_headers(seeded))
+    assert cart.json()["item_count"] == 1
 
 
 @pytest.mark.anyio
@@ -403,17 +860,32 @@ def test_langgraph_runtime_registers_only_bounded_commerce_tools() -> None:
     assert names == {
         "search_catalog",
         "recommend_products",
+        "present_products",
         "get_cart",
-        "add_to_cart",
-        "update_cart_item",
-        "remove_cart_item",
         "list_fulfillment_destinations",
-        "prepare_checkout",
-        "list_scheduling_options",
-        "draft_scheduled_purchase",
     }
     assert "approve_checkout" not in names
     assert "create_payment" not in names
+
+    checkout_toolbox = AgentToolbox(
+        db=None,  # type: ignore[arg-type]
+        customer=None,  # type: ignore[arg-type]
+        merchant_id=uuid.uuid4(),
+        merchant_slug="ember-and-leaf",
+        conversation_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        policy_decision=AgentActionPolicy.classify("Buy my cart and check out."),
+    )
+    checkout_names = {tool.name for tool in runtime.build_tools(checkout_toolbox)}
+    assert checkout_names == {
+        "search_catalog",
+        "recommend_products",
+        "present_products",
+        "get_cart",
+        "list_fulfillment_destinations",
+        "add_to_cart",
+        "prepare_checkout",
+    }
 
 
 @pytest.mark.anyio

@@ -1037,6 +1037,14 @@ class AgentRun(Base):
     request_sha256: Mapped[str] = mapped_column(String(64))
     response_sha256: Mapped[str | None] = mapped_column(String(64))
     model: Mapped[str] = mapped_column(String(120))
+    graph_version: Mapped[str] = mapped_column(String(80), default="ask-ember-graph-2")
+    policy_version: Mapped[str] = mapped_column(String(80), default="agent-action-policy-1")
+    intent: Mapped[str] = mapped_column(String(40), default="answer", index=True)
+    risk_level: Mapped[str] = mapped_column(String(24), default="low", index=True)
+    allowed_tools: Mapped[list[str]] = mapped_column(JSON, default=list)
+    checkpoint_state: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    tool_call_count: Mapped[int] = mapped_column(Integer, default=0)
+    mutation_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(24), default="running", index=True)
     error_code: Mapped[str | None] = mapped_column(String(120))
     started_at: Mapped[datetime] = mapped_column(
@@ -1093,6 +1101,59 @@ class AgentToolCall(Base):
     run: Mapped[AgentRun] = relationship(back_populates="tool_calls")
 
 
+class AgentMemorySetting(TimestampMixin, Base):
+    __tablename__ = "agent_memory_settings"
+    __table_args__ = (
+        UniqueConstraint(
+            "customer_id", "merchant_id", name="uq_agent_memory_setting_customer_merchant"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True
+    )
+    merchant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("merchants.id", ondelete="CASCADE"), index=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AgentMemoryFact(TimestampMixin, Base):
+    __tablename__ = "agent_memory_facts"
+    __table_args__ = (
+        UniqueConstraint(
+            "customer_id",
+            "merchant_id",
+            "kind",
+            "normalized_key",
+            name="uq_agent_memory_fact_scope_key",
+        ),
+        CheckConstraint(
+            "confidence >= 0 AND confidence <= 1", name="ck_agent_memory_confidence_range"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True
+    )
+    merchant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("merchants.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(48), index=True)
+    normalized_key: Mapped[str] = mapped_column(String(80))
+    value: Mapped[dict[str, Any]] = mapped_column(JSON)
+    source_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("agent_messages.id", ondelete="SET NULL"), index=True
+    )
+    confidence: Mapped[Decimal] = mapped_column(Numeric(4, 3), default=Decimal("1.000"))
+    sensitivity: Mapped[str] = mapped_column(String(24), default="standard")
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 
@@ -1106,6 +1167,14 @@ class AuditEvent(Base):
     aggregate_type: Mapped[str] = mapped_column(String(80), index=True)
     aggregate_id: Mapped[str] = mapped_column(String(120), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    schema_version: Mapped[str] = mapped_column(String(16), default="1")
+    severity: Mapped[str] = mapped_column(String(16), default="info", index=True)
+    source_component: Mapped[str] = mapped_column(String(80), default="commerce-core")
+    correlation_id: Mapped[str] = mapped_column(String(160), index=True)
+    sequence: Mapped[int] = mapped_column(Integer, default=0)
+    previous_hash: Mapped[str | None] = mapped_column(String(64))
+    current_hash: Mapped[str] = mapped_column(String(64), default="legacy")
+    hash_algorithm: Mapped[str] = mapped_column(String(16), default="SHA-256")
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, index=True
     )
@@ -1129,9 +1198,22 @@ class WebhookEvent(Base):
 
 
 Index("ix_audit_aggregate", AuditEvent.aggregate_type, AuditEvent.aggregate_id)
+Index(
+    "uq_audit_stream_sequence",
+    AuditEvent.merchant_id,
+    AuditEvent.aggregate_type,
+    AuditEvent.aggregate_id,
+    AuditEvent.sequence,
+    unique=True,
+    sqlite_where=AuditEvent.sequence > 0,
+    postgresql_where=AuditEvent.sequence > 0,
+)
 Index("ix_inventory_variant_location", InventoryItem.variant_id, InventoryItem.location_id)
 Index(
     "ix_scheduled_purchase_due",
     ScheduledPurchaseIntent.status,
     ScheduledPurchaseIntent.next_run_at,
 )
+
+# Register listeners only after every mapped class, including AuditEvent, exists.
+from app.db import audit as audit  # noqa: E402,F401

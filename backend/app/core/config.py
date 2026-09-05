@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     agent_timeout_seconds: float = Field(default=30.0, ge=5.0, le=60.0)
     agent_max_history_messages: int = Field(default=20, ge=4, le=40)
     agent_max_output_characters: int = Field(default=6000, ge=1000, le=12000)
+    agent_max_tool_calls: int = Field(default=8, ge=1, le=20)
+    agent_max_mutations_per_turn: int = Field(default=1, ge=1, le=2)
+    agent_max_turns_per_minute: int = Field(default=10, ge=1, le=60)
+    agent_memory_default_ttl_days: int = Field(default=180, ge=1, le=365)
+    agent_memory_max_facts: int = Field(default=24, ge=1, le=100)
+    agent_memory_integrity_key: SecretStr | None = None
+    ucp_agent_max_checkouts_per_minute: int = Field(default=20, ge=1, le=120)
     langsmith_tracing: bool = False
     langsmith_api_key: SecretStr | None = None
     langsmith_project: str = "agentbasket-local"

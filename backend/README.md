@@ -30,6 +30,13 @@ Step 8 adds human-not-present scheduled purchases. Ember can create only an iner
 the Trusted Surface separately passkey-authorizes open AP2 mandates, Razorpay confirms a UPI
 Autopay token, and a durable worker closes and verifies the mandate chains for each exact run.
 
+Step 9 hardens Ember with a typed graph state, deterministic intent/risk policy, phase-specific
+tool capabilities, one-write budgets, fresh resource scoping, authoritative mutation verification,
+and durable run checkpoints. Typed Preference Memory is explicit, customer-and-merchant scoped,
+TTL-bound and HMAC-verified; it is advisory and never grants consent. Agent output is checked for
+common secret, token and payment-card forms. New audit events use a versioned, append-only,
+per-stream SHA-256 hash chain.
+
 The UCP checkout extension adds persistent server-side handoffs at `/ucp/checkout-sessions`.
 External agents may create, recover, replace, or cancel a variant selection, but cannot submit a
 Razorpay credential or complete payment. Every session returns `requires_escalation` and an opaque
@@ -61,6 +68,7 @@ The versioned API includes:
 - `POST /api/v1/payments/razorpay/verify` and `POST /api/v1/webhooks/razorpay`;
 - customer receipts under `/api/v1/orders`; and
 - authenticated Ask Ember conversations and messages under `/api/v1/agent/conversations`; and
+- customer Preference Memory controls under `/api/v1/agent/memory/{merchant_slug}`; and
 - AP2 challenge, approval and evidence under `/api/v1/checkouts/{checkout_id}/ap2`;
 - customer scheduled-purchase authorization and controls under `/api/v1/scheduled-purchases`; and
 - Razorpay UPI Autopay registration under
@@ -105,6 +113,12 @@ turns can contain addresses and order data; set `LANGSMITH_HIDE_INPUTS=false` an
 `LANGSMITH_HIDE_OUTPUTS=false` only with non-sensitive local test data. Trace metadata contains the
 local conversation/run IDs and model name so a failed request can be correlated with the audit log.
 
+Agent hardening settings are `AGENT_MAX_TOOL_CALLS`, `AGENT_MAX_MUTATIONS_PER_TURN`,
+`AGENT_MAX_TURNS_PER_MINUTE`, `AGENT_MEMORY_DEFAULT_TTL_DAYS`, `AGENT_MEMORY_MAX_FACTS`, and
+`AGENT_MEMORY_INTEGRITY_KEY`. Set a stable random integrity key in every non-development
+environment. `UCP_AGENT_MAX_CHECKOUTS_PER_MINUTE` limits new UCP checkout sessions per external
+agent profile; exact idempotent recovery remains available after the limit is reached.
+
 For AP2, configure separate ES256 P-256 private keys for the merchant, Agent Provider,
 Credentials Provider, and test-mode payment processor using the `AP2_*` settings in
 `.env.example`. The public keys are
@@ -131,10 +145,16 @@ connected separately to a permissioned merchant-operations agent.
 .venv/bin/ruff check .
 .venv/bin/ruff format --check .
 .venv/bin/alembic upgrade head --sql
+.venv/bin/python scripts/verify_audit_chain.py --help
+.venv/bin/python scripts/smoke_agent_security.py --base-url http://127.0.0.1:8000
 ```
 
 Tests use an isolated SQLite database. PostgreSQL remains the production database and Alembic
 is the schema authority.
+
+The full happy-path, denial, tenant-isolation, memory-poisoning, agent-hijacking, UCP, JSON-LD,
+AP2, payment, scheduling, recovery, and audit checklist is in
+[`../blog/manual-agent-security-test-scenarios.md`](../blog/manual-agent-security-test-scenarios.md).
 
 ## UCP checkout smoke test
 

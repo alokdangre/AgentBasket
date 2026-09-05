@@ -1,6 +1,9 @@
 import Link from "next/link";
+import ReactMarkdown from "react-markdown";
 
 import { AgentCheckoutPayment } from "@/components/agent-checkout-payment";
+import { AgentProductConfiguration } from "@/components/agent-product-configuration";
+import { AgentScheduleConfiguration } from "@/components/agent-schedule-configuration";
 import { ScheduledPurchaseArtifact } from "@/components/scheduled-purchase-artifact";
 import type { AgentMessage } from "@/lib/account-types";
 import { formatMoney } from "@/lib/storefront-data";
@@ -9,19 +12,39 @@ import styles from "@/styles/storefront.module.css";
 type AgentMessageViewProps = {
   message: AgentMessage;
   disabled: boolean;
+  configurationActive: boolean;
   onSuggestion: (suggestion: string) => void;
   onPaid: () => void;
 };
 
+function normalizedWords(value: string) {
+  return value.toLocaleLowerCase("en").match(/[a-z0-9]+/g)?.join(" ") ?? "";
+}
+
+function productsNamedInMessage(products: AgentMessage["structured_content"]["products"], text: string) {
+  const normalizedText = ` ${normalizedWords(text)} `;
+  return (products ?? [])
+    .map((product) => ({
+      product,
+      position: normalizedText.indexOf(` ${normalizedWords(product.name)} `),
+    }))
+    .filter(({ position }) => position >= 0)
+    .sort((left, right) => left.position - right.position)
+    .map(({ product }) => product);
+}
+
 export function AgentMessageView({
   message,
   disabled,
+  configurationActive,
   onSuggestion,
   onPaid,
 }: AgentMessageViewProps) {
   const structured = message.structured_content;
-  const products = structured.products ?? [];
+  const products = productsNamedInMessage(structured.products, message.content);
   const activity = structured.activity ?? [];
+  const verifiedCount = activity.filter((item) => item.status === "success").length;
+  const safeFallbackCount = activity.length - verifiedCount;
 
   return (
     <article
@@ -30,7 +53,37 @@ export function AgentMessageView({
       <span className={styles.agentMessageAuthor}>
         {message.role === "user" ? "You" : "Ember"}
       </span>
-      <p>{message.content}</p>
+      {message.role === "assistant" ? (
+        <div className={styles.agentMessageContent}>
+          <ReactMarkdown
+            skipHtml
+            disallowedElements={["a", "img"]}
+            unwrapDisallowed
+          >
+            {message.content}
+          </ReactMarkdown>
+        </div>
+      ) : (
+        <p>{message.content}</p>
+      )}
+
+      {structured.product_configuration ? (
+        <AgentProductConfiguration
+          configuration={structured.product_configuration}
+          disabled={disabled}
+          active={configurationActive}
+          onSubmit={onSuggestion}
+        />
+      ) : null}
+
+      {structured.schedule_configuration ? (
+        <AgentScheduleConfiguration
+          configuration={structured.schedule_configuration}
+          disabled={disabled}
+          active={configurationActive}
+          onSubmit={onSuggestion}
+        />
+      ) : null}
 
       {products.length ? (
         <div className={styles.agentProducts}>
@@ -42,10 +95,13 @@ export function AgentMessageView({
             );
             if (!variant) return null;
             return (
-              <Link
-                href={`/shop?product=${product.slug}`}
+              <button
+                type="button"
                 className={styles.agentProduct}
                 key={product.id}
+                disabled={disabled}
+                aria-label={`Ask Ember to add ${product.name} to the cart`}
+                onClick={() => onSuggestion(`Add one ${product.name} to my cart.`)}
               >
                 <span className={styles.agentProductIndex} aria-hidden="true">
                   {String(index + 1).padStart(2, "0")}
@@ -58,7 +114,7 @@ export function AgentMessageView({
                     {formatMoney(variant.price_minor, variant.currency)}
                   </small>
                 </span>
-              </Link>
+              </button>
             );
           })}
         </div>
@@ -94,6 +150,24 @@ export function AgentMessageView({
         <ScheduledPurchaseArtifact schedule={structured.scheduled_purchase} />
       ) : null}
 
+      {structured.memory ? (
+        <div className={styles.agentCommerceArtifact} data-status={structured.memory.status}>
+          <div>
+            <span>Preference memory</span>
+            <strong>
+              {structured.memory.status === "saved"
+                ? `${structured.memory.kind?.replaceAll("_", " ")} saved`
+                : structured.memory.status === "forgotten"
+                  ? `${structured.memory.kind?.replaceAll("_", " ")} forgotten`
+                  : "No memory changed"}
+            </strong>
+          </div>
+          {structured.memory.value !== undefined ? (
+            <span>{String(structured.memory.value)}</span>
+          ) : null}
+        </div>
+      ) : null}
+
       {structured.suggestions?.length ? (
         <div className={styles.agentSuggestions}>
           {structured.suggestions.map((suggestion) => (
@@ -112,7 +186,11 @@ export function AgentMessageView({
       {activity.length ? (
         <details className={styles.agentActivity}>
           <summary>
-            {activity.length} verified {activity.length === 1 ? "action" : "actions"}
+            {safeFallbackCount > 0
+              ? `${verifiedCount} verified · ${safeFallbackCount} safe ${
+                  safeFallbackCount === 1 ? "fallback" : "fallbacks"
+                }`
+              : `${activity.length} verified ${activity.length === 1 ? "action" : "actions"}`}
           </summary>
           <ul>
             {activity.map((item, index) => (

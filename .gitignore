@@ -1,5 +1,6 @@
 # Local architecture notes and implementation plans are intentionally not published.
 docs/
+blog/
 frontend/DESIGN.md
 
 # Secrets and local configuration

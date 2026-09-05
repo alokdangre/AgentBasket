@@ -227,6 +227,7 @@ export function ChatLauncher() {
               key={message.id}
               message={message}
               disabled={status !== "idle"}
+              configurationActive={message.id === messages[messages.length - 1]?.id}
               onSuggestion={(suggestion) => void sendMessage(suggestion)}
               onPaid={() => {
                 window.dispatchEvent(new Event("cart:updated"));

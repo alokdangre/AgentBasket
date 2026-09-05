@@ -32,6 +32,22 @@ function isAllowed(method: string, path: string[]): boolean {
   if (exactRoutes.has(route)) return true;
   if (
     path.length === 3 &&
+    path[0] === "agent" &&
+    path[1] === "memory" &&
+    ["GET", "PATCH"].includes(method)
+  ) {
+    return true;
+  }
+  if (
+    path.length === 4 &&
+    path[0] === "agent" &&
+    path[1] === "memory" &&
+    ["PUT", "DELETE"].includes(method)
+  ) {
+    return true;
+  }
+  if (
+    path.length === 3 &&
     path[0] === "me" &&
     path[1] === "addresses" &&
     ["PATCH", "DELETE"].includes(method)

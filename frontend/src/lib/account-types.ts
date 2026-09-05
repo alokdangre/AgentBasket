@@ -435,9 +435,48 @@ export type AgentProduct = {
   recommendation_reason?: string;
 };
 
+export type AgentProductConfiguration = {
+  purpose: "cart_add" | "schedule_draft";
+  product_id: string;
+  product_name: string;
+  product_slug: string;
+  quantity: number;
+  variants: ProductVariant[];
+  modifier_groups: ModifierGroup[];
+};
+
+export type AgentScheduleConfiguration = {
+  version: "agent-schedule-configuration-1";
+  currency: "INR";
+  frequency: "once" | "daily" | "weekly" | "monthly" | null;
+  frequency_options: Array<"once" | "daily" | "weekly" | "monthly">;
+  minimum_notification_lead_hours: number;
+  earliest_first_run_at: string;
+  recurring_provider_enabled: boolean;
+  draft_available: boolean;
+  availability_code: "recurring_provider_disabled" | "recurring_instrument_unavailable" | null;
+  availability_message: string | null;
+};
+
 export type AgentStructuredContent = {
   suggestions?: string[];
+  clarification?: {
+    version: "agent-clarification-1";
+    kind: "fulfillment_method" | "delivery_address" | "pickup_location";
+    purpose: "checkout" | "schedule_draft";
+    options: Array<{
+      destination_id: string;
+      label: string;
+      fulfillment_type: "local_delivery" | "pickup";
+    }>;
+    default_destination_id: string | null;
+  };
   products?: AgentProduct[];
+  product_configuration?: AgentProductConfiguration;
+  schedule_configuration?: AgentScheduleConfiguration;
+  schedule_draft_pending?: {
+    version: "agent-schedule-draft-1";
+  };
   cart?: Cart;
   checkout?: Checkout & {
     approval_required: boolean;
@@ -458,10 +497,21 @@ export type AgentStructuredContent = {
       name: string;
       postal_code: string;
       preparation_minutes: number;
+      is_default: boolean;
     }>;
   };
   scheduled_purchase?: ScheduledPurchase;
   activity?: Array<{ tool: string; status: "success" | "error"; label: string }>;
+  guardrail?: {
+    ui_claim_corrected: boolean;
+  };
+  memory?: {
+    status: "saved" | "forgotten" | "not_found" | "rejected";
+    kind?: string;
+    value?: string | number;
+    reason?: string;
+    allowed_kinds?: string[];
+  };
 };
 
 export type AgentMessage = {

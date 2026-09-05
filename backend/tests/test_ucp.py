@@ -1,6 +1,8 @@
 import httpx
 import pytest
 
+from app.core.config import get_settings
+
 pytestmark = pytest.mark.anyio
 
 UCP_HEADERS = {
@@ -198,6 +200,36 @@ async def test_ucp_checkout_is_idempotent_and_requires_trusted_payment_handoff(
     )
     assert collision.status_code == 409
     assert collision.json()["error"]["code"] == "idempotency_key_reused"
+
+
+async def test_ucp_checkout_rate_limit_is_agent_scoped(
+    client: httpx.AsyncClient,
+    seeded: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "ucp_agent_max_checkouts_per_minute", 1)
+    first = await client.post(
+        "/ucp/checkout-sessions",
+        headers={
+            **UCP_HEADERS,
+            "Request-Id": "ucp-rate-first",
+            "Idempotency-Key": "ucp-rate-checkout-first",
+        },
+        json={"line_items": [{"item": {"id": str(seeded["accessory_variant_id"])}, "quantity": 1}]},
+    )
+    assert first.status_code == 201
+
+    limited = await client.post(
+        "/ucp/checkout-sessions",
+        headers={
+            **UCP_HEADERS,
+            "Request-Id": "ucp-rate-second",
+            "Idempotency-Key": "ucp-rate-checkout-second",
+        },
+        json={"line_items": [{"item": {"id": str(seeded["accessory_variant_id"])}, "quantity": 1}]},
+    )
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "ucp_agent_rate_limit_exceeded"
 
 
 async def test_ucp_checkout_lifecycle_is_agent_scoped(

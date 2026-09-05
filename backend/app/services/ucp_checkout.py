@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import Settings
@@ -84,6 +84,21 @@ class UcpCheckoutService:
                         "Idempotency-Key was already used for a different UCP checkout.",
                     )
                 return self._response(existing)
+
+            recent_checkouts = self.db.scalar(
+                select(func.count())
+                .select_from(UcpCheckoutSession)
+                .where(
+                    UcpCheckoutSession.agent_profile_url == agent_profile_url,
+                    UcpCheckoutSession.created_at >= utc_now() - timedelta(minutes=1),
+                )
+            )
+            if int(recent_checkouts or 0) >= self.settings.ucp_agent_max_checkouts_per_minute:
+                raise DomainError(
+                    "ucp_agent_rate_limit_exceeded",
+                    "This external agent has created too many checkout handoffs. Try again later.",
+                    429,
+                )
 
             snapshots, subtotal = self._resolve_lines(merchant, payload)
             session = UcpCheckoutSession(

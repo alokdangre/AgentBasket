@@ -11,16 +11,32 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agents.policy import (
+    CLARIFICATION_VERSION,
+    MUTATING_TOOLS,
+    SCHEDULE_DRAFT_STATE_VERSION,
+    AgentActionPolicy,
+    AgentIntent,
+    AgentPolicyDecision,
+    FulfillmentClarification,
+)
 from app.core.config import get_settings
 from app.core.errors import DomainError
 from app.db.models import (
+    AgentRun,
     AgentToolCall,
     AuditEvent,
+    Cart,
+    CartItem,
+    Checkout,
     CustomerAddress,
     Location,
+    Product,
+    ProductVariant,
+    ScheduledPurchaseIntent,
     UserAccount,
 )
-from app.domain.enums import FulfillmentType
+from app.domain.enums import FulfillmentType, LocationKind
 from app.schemas.cart import CartItemCreateRequest, CartItemUpdateRequest
 from app.schemas.checkout import CheckoutFromCartCreate
 from app.schemas.scheduled_purchase import ScheduledPurchaseDraftCreate
@@ -52,6 +68,9 @@ class AgentToolbox:
         merchant_slug: str,
         conversation_id: uuid.UUID,
         run_id: uuid.UUID,
+        policy_decision: AgentPolicyDecision | None = None,
+        current_message: str = "",
+        pending_fulfillment: FulfillmentClarification | None = None,
     ) -> None:
         self.db = db
         self.customer = customer
@@ -59,7 +78,24 @@ class AgentToolbox:
         self.merchant_slug = merchant_slug
         self.conversation_id = conversation_id
         self.run_id = run_id
+        self.policy_decision = policy_decision or AgentActionPolicy.classify("")
+        self.current_message = " ".join(current_message.strip().lower().split())[:2000]
+        self.pending_fulfillment = pending_fulfillment
+        self.tool_call_count = 0
+        self.mutation_count = 0
+        self.seen_products_by_id: dict[str, dict[str, Any]] = {}
+        self.seen_variant_ids: set[str] = set()
+        self.seen_cart_item_ids: set[str] = set()
+        self.seen_destination_ids: set[str] = set()
+        self.seen_destinations_by_id: dict[str, dict[str, Any]] = {}
+        self.seen_payment_instrument_ids: set[str] = set()
         self.outcomes: list[dict[str, Any]] = []
+        self.memory_activity: dict[str, Any] | None = None
+        self._fulfillment_destinations_cache: dict[str, Any] | None = None
+
+    @property
+    def allowed_tool_names(self) -> frozenset[str]:
+        return self.policy_decision.allowed_tools
 
     def commerce_tools(self) -> list[Callable[..., dict[str, Any]]]:
         def search_catalog(
@@ -84,6 +120,16 @@ class AgentToolbox:
             """
             return self.recommend_products(preferences, budget_minor, postal_code)
 
+        def present_products(product_ids: list[str]) -> dict[str, Any]:
+            """Select the exact catalog products shown as clickable recommendations.
+
+            Call once after search_catalog or recommend_products with one to
+            three product IDs returned in this run. Include only products you
+            actually recommend and name in the final answer. This is display
+            selection only and never changes commerce state.
+            """
+            return self.present_products(product_ids)
+
         def get_cart() -> dict[str, Any]:
             """Read the signed-in customer's current cart and authoritative subtotal."""
             return self.get_cart()
@@ -93,9 +139,11 @@ class AgentToolbox:
         ) -> dict[str, Any]:
             """Add an exact catalog configuration to the customer's cart.
 
-            Call only after the customer's latest message explicitly asks to add
-            it. Use variant and modifier IDs returned by catalog tools. Required
-            modifier groups must be satisfied.
+            Call only after the customer's latest message explicitly asks to add,
+            buy, or order it. Use variant and modifier IDs returned by catalog
+            tools. Required modifier groups must be satisfied. If this fulfills a
+            buy request for an empty cart, stop after adding; checkout preparation
+            requires a later turn.
             """
             return self.add_to_cart(variant_id, quantity, modifier_option_ids)
 
@@ -116,10 +164,12 @@ class AgentToolbox:
         ) -> dict[str, Any]:
             """Prepare an exact, reserving checkout without approving or paying.
 
-            Call only after the latest customer message explicitly asks to buy or
-            check out. For local_delivery or shipping use a saved address_id. For
-            pickup use a location_id. The returned quote always requires separate
-            customer approval in the trusted UI.
+            Call only after the latest customer message explicitly asks to buy,
+            check out, or use a fulfillment destination for the pending cart. For
+            local_delivery or shipping use a saved address_id. For pickup use a
+            location_id. The returned quote always requires separate customer
+            approval in the trusted UI. Never call this after a cart mutation in
+            the same turn.
             """
             return self.prepare_checkout(fulfillment_type, address_id, location_id)
 
@@ -154,6 +204,8 @@ class AgentToolbox:
             per-order, and total-budget limits. Each items entry must contain
             acceptable_variant_ids, quantity, and modifier_option_ids using IDs
             returned by catalog tools. Use IDs from list_scheduling_options.
+            For pickup, pass location_id and leave address_id empty. For
+            local_delivery or shipping, pass address_id and leave location_id empty.
             The trusted account UI separately displays and passkey-authorizes
             the draft.
             """
@@ -173,9 +225,10 @@ class AgentToolbox:
                 location_id=location_id,
             )
 
-        return [
+        tools = [
             search_catalog,
             recommend_products,
+            present_products,
             get_cart,
             add_to_cart,
             update_cart_item,
@@ -185,6 +238,7 @@ class AgentToolbox:
             list_scheduling_options,
             draft_scheduled_purchase,
         ]
+        return [tool for tool in tools if tool.__name__ in self.allowed_tool_names]
 
     def search_catalog(
         self, query: str = "", postal_code: str = "", max_price_minor: int = 0
@@ -215,6 +269,13 @@ class AgentToolbox:
     def get_cart(self) -> dict[str, Any]:
         return self._invoke("get_cart", {}, self._get_cart)
 
+    def present_products(self, product_ids: list[str]) -> dict[str, Any]:
+        return self._invoke(
+            "present_products",
+            {"product_ids": product_ids[:3]},
+            lambda: self._present_products(product_ids),
+        )
+
     def add_to_cart(
         self, variant_id: str, quantity: int, modifier_option_ids: list[str]
     ) -> dict[str, Any]:
@@ -243,9 +304,14 @@ class AgentToolbox:
         )
 
     def list_fulfillment_destinations(self) -> dict[str, Any]:
-        return self._invoke(
+        if self._fulfillment_destinations_cache is not None:
+            return self._fulfillment_destinations_cache
+        result = self._invoke(
             "list_fulfillment_destinations", {}, self._list_fulfillment_destinations
         )
+        if result.get("status") == "success":
+            self._fulfillment_destinations_cache = result
+        return result
 
     def prepare_checkout(
         self, fulfillment_type: str, address_id: str = "", location_id: str = ""
@@ -301,7 +367,7 @@ class AgentToolbox:
             lambda: self._draft_scheduled_purchase(input_payload),
         )
 
-    def structured_content(self) -> dict[str, Any]:
+    def structured_content(self, assistant_text: str = "") -> dict[str, Any]:
         content: dict[str, Any] = {
             "activity": [
                 {
@@ -312,10 +378,20 @@ class AgentToolbox:
                 for outcome in self.outcomes
             ]
         }
+        product_candidates: dict[str, dict[str, Any]] = {}
+        catalog_candidates: dict[str, dict[str, Any]] = {}
         for outcome in self.outcomes:
             payload = outcome["payload"]
-            if payload.get("products"):
-                content["products"] = payload["products"]
+            if outcome["status"] == "success" and outcome["tool"] in {
+                "search_catalog",
+                "recommend_products",
+                "present_products",
+            }:
+                for product in payload.get("products", []):
+                    catalog_candidates[str(product["id"])] = product
+            if outcome["tool"] == "present_products" and outcome["status"] == "success":
+                for product in payload.get("products", []):
+                    product_candidates[str(product["id"])] = product
             if "cart" in payload:
                 content["cart"] = payload["cart"]
             if "checkout" in payload:
@@ -326,7 +402,318 @@ class AgentToolbox:
                 content["destinations"] = payload["destinations"]
             if "scheduling_options" in payload:
                 content["scheduling_options"] = payload["scheduling_options"]
+        referenced_products = self._products_referenced_in_text(
+            list(product_candidates.values()), assistant_text
+        )
+        if referenced_products:
+            content["products"] = referenced_products
+        configuration = self._configuration_for_response(
+            list(catalog_candidates.values()), assistant_text
+        )
+        if configuration is not None:
+            content["product_configuration"] = configuration
+        schedule_configuration = self._schedule_configuration_for_response()
+        if schedule_configuration is not None:
+            content["schedule_configuration"] = schedule_configuration
+        clarification = self._fulfillment_clarification_for_response()
+        if clarification is not None:
+            content["clarification"] = clarification
+            content["suggestions"] = [option["label"] for option in clarification["options"]]
+        if self.memory_activity is not None:
+            content["memory"] = self.memory_activity
+        if (
+            self.policy_decision.intent == AgentIntent.SCHEDULE_DRAFT
+            and "scheduled_purchase" not in content
+        ):
+            content["schedule_draft_pending"] = {
+                "version": SCHEDULE_DRAFT_STATE_VERSION,
+            }
         return content
+
+    def _fulfillment_clarification_for_response(self) -> dict[str, Any] | None:
+        if self.policy_decision.intent not in {
+            AgentIntent.CHECKOUT_PREPARE,
+            AgentIntent.FULFILLMENT_SELECT,
+            AgentIntent.SCHEDULE_DRAFT,
+        }:
+            return None
+        if any(
+            outcome["tool"] in {"prepare_checkout", "draft_scheduled_purchase"}
+            and outcome["status"] == "success"
+            for outcome in self.outcomes
+        ) or any(
+            outcome["tool"] == "draft_scheduled_purchase"
+            for outcome in self.outcomes
+        ):
+            return None
+        destinations = next(
+            (
+                outcome["payload"].get(
+                    "destinations",
+                    outcome["payload"].get("scheduling_options", {}),
+                )
+                for outcome in reversed(self.outcomes)
+                if outcome["tool"] in {"list_fulfillment_destinations", "list_scheduling_options"}
+                and outcome["status"] == "success"
+            ),
+            {},
+        )
+        addresses = destinations.get("delivery_addresses", [])
+        locations = destinations.get("pickup_locations", [])
+        if not addresses and not locations:
+            return None
+        delivery_unserviceable = any(
+            outcome["tool"] == "prepare_checkout"
+            and outcome["status"] == "error"
+            and outcome["payload"].get("error", {}).get("code") == "address_not_serviceable"
+            for outcome in self.outcomes
+        )
+        purpose = (
+            "schedule_draft"
+            if self.policy_decision.intent == AgentIntent.SCHEDULE_DRAFT
+            else "checkout"
+        )
+        if delivery_unserviceable:
+            return self._pickup_location_clarification(locations, purpose)
+        if re.search(
+            r"\b(?:local\s+delivery|delivery|deliver|address)\b",
+            self.current_message,
+        ):
+            return self._delivery_address_clarification(addresses, purpose)
+        if re.search(r"\b(?:pickup|pick(?:\s+it)?\s+up)\b", self.current_message):
+            return self._pickup_location_clarification(locations, purpose)
+        if (
+            purpose == "schedule_draft"
+            and self.policy_decision.fulfillment_selection is None
+            and self.pending_fulfillment is not None
+            and self.pending_fulfillment.purpose == "schedule_draft"
+        ):
+            if self.pending_fulfillment.kind == "delivery_address":
+                return self._delivery_address_clarification(addresses, purpose)
+            if self.pending_fulfillment.kind == "pickup_location":
+                return self._pickup_location_clarification(locations, purpose)
+        return self._fulfillment_method_clarification(addresses, locations, purpose)
+
+    @staticmethod
+    def _delivery_address_clarification(
+        addresses: list[dict[str, Any]],
+        purpose: str = "checkout",
+    ) -> dict[str, Any] | None:
+        options = [
+            {
+                "destination_id": str(address["id"]),
+                "label": f"Use {address['label']} address",
+                "fulfillment_type": "local_delivery",
+            }
+            for address in addresses
+            if address.get("id") and address.get("label")
+        ]
+        if not options:
+            return None
+        default_address = next(
+            (address for address in addresses if address.get("is_default")),
+            addresses[0],
+        )
+        return {
+            "version": CLARIFICATION_VERSION,
+            "kind": "delivery_address",
+            "purpose": purpose,
+            "options": options,
+            "default_destination_id": str(default_address["id"]),
+        }
+
+    @staticmethod
+    def _pickup_location_clarification(
+        locations: list[dict[str, Any]],
+        purpose: str = "checkout",
+    ) -> dict[str, Any] | None:
+        options = [
+            {
+                "destination_id": str(location["id"]),
+                "label": str(location["name"]),
+                "fulfillment_type": "pickup",
+            }
+            for location in locations
+            if location.get("id") and location.get("name")
+        ]
+        if not options:
+            return None
+        default_location = next(
+            (location for location in locations if location.get("is_default")),
+            locations[0],
+        )
+        return {
+            "version": CLARIFICATION_VERSION,
+            "kind": "pickup_location",
+            "purpose": purpose,
+            "options": options,
+            "default_destination_id": str(default_location["id"]),
+        }
+
+    @staticmethod
+    def _fulfillment_method_clarification(
+        addresses: list[dict[str, Any]],
+        locations: list[dict[str, Any]],
+        purpose: str = "checkout",
+    ) -> dict[str, Any] | None:
+        options: list[dict[str, str]] = []
+        if addresses:
+            default_address = next(
+                (address for address in addresses if address.get("is_default")),
+                addresses[0],
+            )
+            options.append(
+                {
+                    "destination_id": str(default_address["id"]),
+                    "label": "Local delivery",
+                    "fulfillment_type": "local_delivery",
+                }
+            )
+        if locations:
+            default_location = next(
+                (location for location in locations if location.get("is_default")),
+                locations[0],
+            )
+            options.append(
+                {
+                    "destination_id": str(default_location["id"]),
+                    "label": "Pickup",
+                    "fulfillment_type": "pickup",
+                }
+            )
+        if not options:
+            return None
+        return {
+            "version": CLARIFICATION_VERSION,
+            "kind": "fulfillment_method",
+            "purpose": purpose,
+            "options": options,
+            "default_destination_id": None,
+        }
+
+    def _configuration_for_response(
+        self, products: list[dict[str, Any]], assistant_text: str
+    ) -> dict[str, Any] | None:
+        if self.policy_decision.intent not in {
+            AgentIntent.CART_ADD,
+            AgentIntent.CHECKOUT_PREPARE,
+            AgentIntent.SCHEDULE_DRAFT,
+        }:
+            return None
+        if any(
+            outcome["tool"] in MUTATING_TOOLS and outcome["status"] == "success"
+            for outcome in self.outcomes
+        ) or any(
+            outcome["tool"] == "draft_scheduled_purchase"
+            for outcome in self.outcomes
+        ):
+            return None
+        referenced = self._products_referenced_in_text(products, self.current_message)
+        if not referenced:
+            referenced = self._products_referenced_in_text(products, assistant_text)
+        configurable = [
+            product
+            for product in referenced
+            if product.get("variants")
+            and (len(product["variants"]) > 1 or product.get("modifier_groups"))
+        ]
+        if len(configurable) != 1:
+            return None
+        product = configurable[0]
+        return {
+            "purpose": (
+                "schedule_draft"
+                if self.policy_decision.intent == AgentIntent.SCHEDULE_DRAFT
+                else "cart_add"
+            ),
+            "product_id": product["id"],
+            "product_name": product["name"],
+            "product_slug": product["slug"],
+            "quantity": 1,
+            "variants": product["variants"],
+            "modifier_groups": product.get("modifier_groups", []),
+        }
+
+    def _schedule_configuration_for_response(self) -> dict[str, Any] | None:
+        if self.policy_decision.intent != AgentIntent.SCHEDULE_DRAFT:
+            return None
+        if any(
+            outcome["tool"] == "draft_scheduled_purchase"
+            for outcome in self.outcomes
+        ):
+            return None
+        schedule_bounds_present = all(
+            re.search(pattern, self.current_message)
+            for pattern in (
+                r"\bfirst\s+run\b",
+                r"\bexpires?\b",
+                r"\bmaximum\s+\d+\s+(?:occurrences?|runs?)\b",
+                r"\bper-order\s+cap\b",
+                r"\btotal\s+cap\b",
+            )
+        )
+        if schedule_bounds_present:
+            return None
+        scheduling_options = next(
+            (
+                outcome["payload"].get("scheduling_options", {})
+                for outcome in reversed(self.outcomes)
+                if outcome["tool"] == "list_scheduling_options" and outcome["status"] == "success"
+            ),
+            {},
+        )
+        if not scheduling_options:
+            return None
+        frequency_match = re.search(
+            r"\b(?:once|daily|weekly|monthly)\b",
+            self.current_message,
+        )
+        return {
+            "version": "agent-schedule-configuration-1",
+            "currency": "INR",
+            "frequency": frequency_match.group(0) if frequency_match else None,
+            "frequency_options": ["once", "daily", "weekly", "monthly"],
+            "minimum_notification_lead_hours": scheduling_options.get(
+                "minimum_notification_lead_hours"
+            ),
+            "earliest_first_run_at": scheduling_options.get("earliest_first_run_at"),
+            "recurring_provider_enabled": bool(
+                scheduling_options.get("recurring_provider_enabled")
+            ),
+            "draft_available": bool(scheduling_options.get("draft_available")),
+            "availability_code": scheduling_options.get("availability_code"),
+            "availability_message": scheduling_options.get("availability_message"),
+        }
+
+    @staticmethod
+    def _products_referenced_in_text(
+        products: list[dict[str, Any]], assistant_text: str
+    ) -> list[dict[str, Any]]:
+        normalized_text = f" {' '.join(_TOKEN_PATTERN.findall(assistant_text.casefold()))} "
+        referenced: list[tuple[int, dict[str, Any]]] = []
+        for product in products:
+            normalized_name = " ".join(
+                _TOKEN_PATTERN.findall(str(product.get("name", "")).casefold())
+            )
+            if not normalized_name:
+                continue
+            position = normalized_text.find(f" {normalized_name} ")
+            if position >= 0:
+                referenced.append((position, product))
+        referenced.sort(key=lambda item: item[0])
+        return [product for _, product in referenced]
+
+    def record_denied_tool_call(
+        self, tool_name: str, input_payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        return self._invoke(
+            tool_name,
+            input_payload,
+            lambda: {
+                "status": "error",
+                "error": {"code": "agent_tool_denied", "message": "Tool denied."},
+            },
+        )
 
     def _search_catalog(self, query: str, postal_code: str, max_price_minor: int) -> dict[str, Any]:
         if max_price_minor < 0:
@@ -386,6 +773,27 @@ class AgentToolbox:
         cart = CartService(self.db).get(self.customer, self.merchant_slug)
         return {"status": "success", "cart": cart.model_dump(mode="json")}
 
+    def _present_products(self, product_ids: list[str]) -> dict[str, Any]:
+        if not product_ids or len(product_ids) > 3 or len(set(product_ids)) != len(product_ids):
+            raise DomainError(
+                "invalid_product_presentation",
+                "Choose between one and three distinct products to present.",
+                422,
+            )
+        missing = [
+            product_id for product_id in product_ids if product_id not in self.seen_products_by_id
+        ]
+        if missing:
+            raise DomainError(
+                "product_presentation_not_verified",
+                "Only products returned by a catalog tool in this run can be presented.",
+                409,
+            )
+        return {
+            "status": "success",
+            "products": [self.seen_products_by_id[product_id] for product_id in product_ids],
+        }
+
     def _add_to_cart(
         self, variant_id: str, quantity: int, modifier_option_ids: list[str]
     ) -> dict[str, Any]:
@@ -427,6 +835,10 @@ class AgentToolbox:
                 .order_by(Location.name)
             )
         )
+        default_pickup_id = next(
+            (location.id for location in locations if location.kind == LocationKind.ROASTERY),
+            locations[0].id if locations else None,
+        )
         result = {
             "status": "success",
             "destinations": {
@@ -447,6 +859,7 @@ class AgentToolbox:
                         "name": location.name,
                         "postal_code": location.postal_code,
                         "preparation_minutes": location.preparation_minutes,
+                        "is_default": location.id == default_pickup_id,
                     }
                     for location in locations
                 ],
@@ -492,16 +905,42 @@ class AgentToolbox:
     def _list_scheduling_options(self) -> dict[str, Any]:
         destinations = self._list_fulfillment_destinations()["destinations"]
         instruments = CredentialsProviderService(self.db).list_instruments(self.customer)
-        lead_hours = get_settings().razorpay_recurring_notification_lead_hours
+        settings = get_settings()
+        lead_hours = settings.razorpay_recurring_notification_lead_hours
+        instrument_payloads = instruments.model_dump(mode="json")["payment_instruments"]
+        recurring_instrument_available = any(
+            instrument.get("instrument_type") == "com.razorpay.upi.autopay"
+            for instrument in instrument_payloads
+        )
+        availability_code = None
+        availability_message = None
+        if not recurring_instrument_available:
+            availability_code = (
+                "recurring_instrument_unavailable"
+                if settings.razorpay_recurring_enabled
+                else "recurring_provider_disabled"
+            )
+            availability_message = (
+                "No eligible recurring payment instrument is available."
+                if settings.razorpay_recurring_enabled
+                else (
+                    "Recurring scheduling is disabled for this environment. "
+                    "A merchant operator must enable it and restart the backend."
+                )
+            )
         return {
             "status": "success",
             "scheduling_options": {
                 **destinations,
-                "payment_instruments": instruments.model_dump(mode="json")["payment_instruments"],
+                "payment_instruments": instrument_payloads,
                 "minimum_notification_lead_hours": lead_hours,
                 "earliest_first_run_at": (
                     utc_now() + timedelta(hours=lead_hours, minutes=1)
                 ).isoformat(),
+                "recurring_provider_enabled": settings.razorpay_recurring_enabled,
+                "draft_available": recurring_instrument_available,
+                "availability_code": availability_code,
+                "availability_message": availability_message,
                 "authorization_note": (
                     "The draft still needs passkey approval. Unattended payment also needs "
                     "a confirmed Razorpay recurring authorization and advance pre-debit "
@@ -511,13 +950,23 @@ class AgentToolbox:
         }
 
     def _draft_scheduled_purchase(self, input_payload: dict[str, Any]) -> dict[str, Any]:
+        fulfillment_type = str(input_payload.get("fulfillment_type", "")).strip().lower()
+        raw_address_id = input_payload.get("address_id")
+        raw_location_id = input_payload.get("location_id")
+        address_id = raw_address_id if raw_address_id else None
+        location_id = raw_location_id if raw_location_id else None
+        if fulfillment_type == "pickup":
+            address_id = None
+        elif fulfillment_type in {"local_delivery", "shipping"}:
+            location_id = None
+
         payload = ScheduledPurchaseDraftCreate.model_validate(
             {
                 "merchant_slug": self.merchant_slug,
                 "currency": "INR",
                 **input_payload,
-                "address_id": input_payload["address_id"] or None,
-                "location_id": input_payload["location_id"] or None,
+                "address_id": address_id,
+                "location_id": location_id,
             }
         )
         schedule = ScheduledPurchaseService(self.db).create_draft(
@@ -541,9 +990,59 @@ class AgentToolbox:
         input_payload: dict[str, Any],
         operation: Callable[[], dict[str, Any]],
     ) -> dict[str, Any]:
+        authorization = AgentActionPolicy.authorize_tool(
+            self.policy_decision,
+            tool_name,
+            tool_call_count=self.tool_call_count,
+            mutation_count=self.mutation_count,
+        )
+        self.tool_call_count += 1
         call_id = self._start_call(tool_name, input_payload)
+        if not authorization.allowed:
+            output = {
+                "status": "error",
+                "error": {
+                    "code": "agent_tool_denied",
+                    "message": "That commerce action is not allowed for this request.",
+                    "reason": authorization.reason_code,
+                },
+            }
+            self._finish_call(
+                call_id,
+                tool_name,
+                input_payload,
+                output,
+                "agent_tool_denied",
+                policy_reason=authorization.reason_code,
+            )
+            self.outcomes.append({"tool": tool_name, "status": "error", "payload": output})
+            return output
+        try:
+            self._validate_action_scope(tool_name, input_payload)
+        except DomainError as error:
+            self.db.rollback()
+            output = {
+                "status": "error",
+                "error": {
+                    "code": error.code,
+                    "message": error.message,
+                    "reason": error.code,
+                },
+            }
+            self._finish_call(
+                call_id,
+                tool_name,
+                input_payload,
+                output,
+                error.code,
+                policy_reason=error.code,
+            )
+            self.outcomes.append({"tool": tool_name, "status": "error", "payload": output})
+            return output
+        self.db.rollback()
         try:
             output = operation()
+            output = self._verify_result(tool_name, output)
         except DomainError as error:
             self.db.rollback()
             output = {
@@ -551,13 +1050,14 @@ class AgentToolbox:
                 "error": {"code": error.code, "message": error.message},
             }
             self._finish_call(call_id, tool_name, input_payload, output, error.code)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as error:
             self.db.rollback()
+            message = str(error).strip() or "The requested product or cart identifier is invalid."
             output = {
                 "status": "error",
                 "error": {
                     "code": "invalid_tool_input",
-                    "message": "The requested product or cart identifier is invalid.",
+                    "message": message,
                 },
             }
             self._finish_call(call_id, tool_name, input_payload, output, "invalid_tool_input")
@@ -572,6 +1072,9 @@ class AgentToolbox:
             }
             self._finish_call(call_id, tool_name, input_payload, output, "tool_execution_failed")
         else:
+            if tool_name in MUTATING_TOOLS:
+                self.mutation_count += 1
+            self._record_seen_resources(output)
             self.db.rollback()
             self._finish_call(call_id, tool_name, input_payload, output, None)
         self.outcomes.append({"tool": tool_name, "status": output["status"], "payload": output})
@@ -597,6 +1100,7 @@ class AgentToolbox:
         input_payload: dict[str, Any],
         output_payload: dict[str, Any],
         error_code: str | None,
+        policy_reason: str = "policy_allowed",
     ) -> None:
         self.db.rollback()
         with self.db.begin():
@@ -607,6 +1111,27 @@ class AgentToolbox:
             call.output_payload = output_payload
             call.error_code = error_code
             call.completed_at = utc_now()
+            run = self.db.get(AgentRun, self.run_id)
+            if run is not None:
+                run.tool_call_count = self.tool_call_count
+                run.mutation_count = self.mutation_count
+                verification = output_payload.get("verification", {})
+                run.checkpoint_state = {
+                    "version": "agent-checkpoint-1",
+                    "phase": (
+                        "mutation_verified"
+                        if verification.get("status") == "verified"
+                        else "tool_denied"
+                        if error_code == "agent_tool_denied"
+                        else "tool_completed"
+                        if error_code is None
+                        else "tool_failed"
+                    ),
+                    "last_tool_call_id": str(call.id),
+                    "last_tool": tool_name,
+                    "verification_status": verification.get("status"),
+                    "updated_at": utc_now().isoformat(),
+                }
             self.db.add(
                 AuditEvent(
                     merchant_id=self.merchant_id,
@@ -621,9 +1146,274 @@ class AgentToolbox:
                         "input_sha256": self._digest(input_payload),
                         "output_sha256": self._digest(output_payload),
                         "error_code": error_code,
+                        "policy_version": self.policy_decision.policy_version,
+                        "policy_reason": policy_reason,
+                        "intent": self.policy_decision.intent.value,
+                        "risk_level": self.policy_decision.risk_level.value,
                     },
                 )
             )
+
+    def _verify_result(self, tool_name: str, output: dict[str, Any]) -> dict[str, Any]:
+        if output.get("status") != "success" or tool_name not in MUTATING_TOOLS:
+            return output
+
+        if tool_name in {"add_to_cart", "update_cart_item", "remove_cart_item"}:
+            authoritative = self._get_cart()
+            return {
+                **authoritative,
+                "verification": {
+                    "status": "verified",
+                    "source": "commerce_database",
+                    "tool": tool_name,
+                },
+            }
+
+        if tool_name == "prepare_checkout":
+            checkout_payload = output.get("checkout", {})
+            checkout_id = uuid.UUID(str(checkout_payload.get("id")))
+            checkout = self.db.scalar(
+                select(Checkout).where(
+                    Checkout.id == checkout_id,
+                    Checkout.customer_id == self.customer.id,
+                    Checkout.merchant_id == self.merchant_id,
+                    Checkout.agent_run_id == self.run_id,
+                )
+            )
+            if checkout is None or (
+                checkout.total_minor != checkout_payload.get("total_minor")
+                or checkout.currency != checkout_payload.get("currency")
+                or checkout.quote_version != checkout_payload.get("quote_version")
+            ):
+                raise DomainError(
+                    "agent_verification_failed",
+                    "The prepared checkout could not be verified against current commerce state.",
+                    409,
+                )
+
+        if tool_name == "draft_scheduled_purchase":
+            schedule_payload = output.get("scheduled_purchase", {})
+            schedule_id = uuid.UUID(str(schedule_payload.get("id")))
+            schedule = self.db.scalar(
+                select(ScheduledPurchaseIntent).where(
+                    ScheduledPurchaseIntent.id == schedule_id,
+                    ScheduledPurchaseIntent.customer_id == self.customer.id,
+                    ScheduledPurchaseIntent.merchant_id == self.merchant_id,
+                )
+            )
+            if schedule is None or schedule.status.value != "draft":
+                raise DomainError(
+                    "agent_verification_failed",
+                    "The scheduled purchase draft could not be verified.",
+                    409,
+                )
+
+        return {
+            **output,
+            "verification": {
+                "status": "verified",
+                "source": "commerce_database",
+                "tool": tool_name,
+            },
+        }
+
+    def _validate_action_scope(self, tool_name: str, payload: dict[str, Any]) -> None:
+        if tool_name == "add_to_cart":
+            variant_id = str(payload.get("variant_id", ""))
+            variant = self.db.scalar(
+                select(ProductVariant)
+                .join(Product, ProductVariant.product_id == Product.id)
+                .where(
+                    ProductVariant.id == self._uuid(variant_id),
+                    ProductVariant.merchant_id == self.merchant_id,
+                    Product.merchant_id == self.merchant_id,
+                )
+            )
+            if variant is None:
+                raise DomainError("variant_not_found", "Product variant is unavailable.", 404)
+            if not self._message_names_resource(variant.product.name, variant.name) and not (
+                self._has_deictic_reference() and self.seen_variant_ids == {variant_id}
+            ):
+                raise DomainError(
+                    "agent_action_ambiguous",
+                    "Name the exact product and size before I add it to the cart.",
+                    409,
+                )
+
+        if tool_name in {"update_cart_item", "remove_cart_item"}:
+            item_id = str(payload.get("cart_item_id", ""))
+            row = self.db.execute(
+                select(CartItem, Product, ProductVariant)
+                .join(Cart, CartItem.cart_id == Cart.id)
+                .join(ProductVariant, CartItem.variant_id == ProductVariant.id)
+                .join(Product, ProductVariant.product_id == Product.id)
+                .where(
+                    CartItem.id == self._uuid(item_id),
+                    Cart.user_id == self.customer.id,
+                    Cart.merchant_id == self.merchant_id,
+                )
+            ).one_or_none()
+            if row is None:
+                raise DomainError("cart_item_not_found", "Cart item was not found.", 404)
+            if not self._message_names_resource(row.Product.name, row.ProductVariant.name) and not (
+                self._has_deictic_reference() and item_id in self.seen_cart_item_ids
+            ):
+                raise DomainError(
+                    "agent_action_ambiguous",
+                    "Name the exact cart item before changing it.",
+                    409,
+                )
+
+        if tool_name == "prepare_checkout":
+            destination_id = str(payload.get("address_id") or payload.get("location_id") or "")
+            if not destination_id or destination_id not in self.seen_destination_ids:
+                raise DomainError(
+                    "agent_destination_not_verified",
+                    "I must read your current fulfillment choices before preparing checkout.",
+                    409,
+                )
+            selection = self.policy_decision.fulfillment_selection
+            destination = self.seen_destinations_by_id.get(destination_id, {})
+            if selection is None and not self._message_authorizes_destination(
+                payload,
+                destination,
+            ):
+                raise DomainError(
+                    "agent_fulfillment_selection_required",
+                    "Choose a delivery address or pickup location before I prepare checkout.",
+                    409,
+                )
+            if selection is not None:
+                selected_field = (
+                    str(payload.get("location_id") or "")
+                    if selection.fulfillment_type == "pickup"
+                    else str(payload.get("address_id") or "")
+                )
+                if (
+                    payload.get("fulfillment_type") != selection.fulfillment_type
+                    or selected_field != selection.destination_id
+                ):
+                    raise DomainError(
+                        "agent_context_destination_mismatch",
+                        "The checkout destination did not match your selected option.",
+                        409,
+                    )
+
+        if tool_name == "draft_scheduled_purchase":
+            destination_id = str(payload.get("address_id") or payload.get("location_id") or "")
+            payment_id = str(payload.get("payment_instrument_id") or "")
+            if (
+                not destination_id
+                or destination_id not in self.seen_destination_ids
+                or payment_id not in self.seen_payment_instrument_ids
+            ):
+                raise DomainError(
+                    "agent_schedule_options_not_verified",
+                    (
+                        "I must read current destinations and payment options before "
+                        "drafting a schedule."
+                    ),
+                    409,
+                )
+            selection = self.policy_decision.fulfillment_selection
+            if selection is not None and selection.purpose == "schedule_draft":
+                selected_field = (
+                    str(payload.get("location_id") or "")
+                    if selection.fulfillment_type == "pickup"
+                    else str(payload.get("address_id") or "")
+                )
+                if (
+                    payload.get("fulfillment_type") != selection.fulfillment_type
+                    or selected_field != selection.destination_id
+                ):
+                    raise DomainError(
+                        "agent_schedule_destination_mismatch",
+                        "The schedule destination did not match your selected option.",
+                        409,
+                    )
+
+    def _record_seen_resources(self, output: dict[str, Any]) -> None:
+        for product in output.get("products", []):
+            if product.get("id"):
+                self.seen_products_by_id[str(product["id"])] = product
+            for variant in product.get("variants", []):
+                if variant.get("id"):
+                    self.seen_variant_ids.add(str(variant["id"]))
+        for item in output.get("cart", {}).get("items", []):
+            if item.get("id"):
+                self.seen_cart_item_ids.add(str(item["id"]))
+        for container in (
+            output.get("destinations", {}),
+            output.get("scheduling_options", {}),
+        ):
+            for key in ("delivery_addresses", "pickup_locations"):
+                for item in container.get(key, []):
+                    if item.get("id"):
+                        destination_id = str(item["id"])
+                        self.seen_destination_ids.add(destination_id)
+                        self.seen_destinations_by_id[destination_id] = {
+                            **item,
+                            "resource_kind": (
+                                "delivery_address"
+                                if key == "delivery_addresses"
+                                else "pickup_location"
+                            ),
+                        }
+            for item in container.get("payment_instruments", []):
+                if item.get("id"):
+                    self.seen_payment_instrument_ids.add(str(item["id"]))
+
+    def _message_names_resource(self, *names: str) -> bool:
+        ignored = {"one", "the", "and", "with", "regular", "small", "medium", "large"}
+        resource_tokens = {
+            token
+            for name in names
+            for token in _TOKEN_PATTERN.findall(name.lower())
+            if len(token) >= 3 and token not in ignored
+        }
+        message_tokens = set(_TOKEN_PATTERN.findall(self.current_message))
+        return bool(resource_tokens & message_tokens)
+
+    def _has_deictic_reference(self) -> bool:
+        return bool(re.search(r"\b(?:this|that|it|one|those|these)\b", self.current_message))
+
+    def _message_authorizes_destination(
+        self,
+        payload: dict[str, Any],
+        destination: dict[str, Any],
+    ) -> bool:
+        fulfillment_type = str(payload.get("fulfillment_type", ""))
+        if fulfillment_type == "pickup":
+            if destination.get("resource_kind") != "pickup_location":
+                return False
+            if self._message_names_resource(str(destination.get("name", ""))):
+                return True
+            requests_pickup = bool(
+                re.search(r"\b(?:pickup|pick(?:\s+it)?\s+up)\b", self.current_message)
+            )
+            return requests_pickup and bool(destination.get("is_default"))
+
+        if destination.get("resource_kind") != "delivery_address":
+            return False
+        if self._message_names_resource(str(destination.get("label", ""))):
+            return True
+        requests_delivery = bool(
+            re.search(
+                r"\b(?:local\s+delivery|deliver|ship|default\s+address|"
+                r"registered\s+address|saved\s+address)\b",
+                self.current_message,
+            )
+        )
+        return requests_delivery and bool(destination.get("is_default"))
+
+    @staticmethod
+    def _uuid(value: str) -> uuid.UUID:
+        try:
+            return uuid.UUID(value)
+        except (TypeError, ValueError) as error:
+            raise DomainError(
+                "invalid_tool_input", "The requested resource identifier is invalid.", 422
+            ) from error
 
     @staticmethod
     def _compact_products(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -665,6 +1455,7 @@ class AgentToolbox:
         labels = {
             "search_catalog": "Catalog checked",
             "recommend_products": "Recommendations grounded in catalog",
+            "present_products": "Recommendation cards selected",
             "get_cart": "Cart read",
             "add_to_cart": "Cart updated",
             "update_cart_item": "Cart quantity updated",

@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api import (
     accounts,
     agent,
+    agent_memory,
     cart,
     catalog,
     checkouts,
@@ -23,5 +24,6 @@ api_router.include_router(cart.router)
 api_router.include_router(operations.router)
 api_router.include_router(payments.router)
 api_router.include_router(agent.router)
+api_router.include_router(agent_memory.router)
 api_router.include_router(scheduled_purchases.router)
 api_router.include_router(scheduled_purchases.merchant_router)

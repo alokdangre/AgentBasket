@@ -44,3 +44,37 @@ class AgentTurnOut(BaseModel):
     conversation_id: uuid.UUID
     run_id: uuid.UUID
     message: AgentMessageOut
+
+
+class AgentMemoryWrite(BaseModel):
+    value: str | int = Field(description="A short, explicit shopping preference value")
+    expires_in_days: int | None = Field(default=None, ge=1, le=365)
+
+
+class AgentMemorySettingUpdate(BaseModel):
+    enabled: bool
+
+
+class AgentMemoryFactOut(BaseModel):
+    id: uuid.UUID
+    kind: str
+    normalized_key: str
+    value: str | int
+    sensitivity: str
+    source: str
+    expires_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentMemoryListOut(BaseModel):
+    merchant_slug: str
+    enabled: bool
+    memories: list[AgentMemoryFactOut]
+
+
+class AgentMemoryMutationOut(BaseModel):
+    merchant_slug: str
+    enabled: bool
+    action: str
+    memory: AgentMemoryFactOut | None = None
